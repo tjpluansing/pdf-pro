@@ -15,7 +15,7 @@ import { ProtectDialog } from './viewer/ProtectDialog'
 import { StampDialog, type StampKind } from './viewer/StampDialog'
 import type { CompressOptions, PageText, PageTextKind, PageTextOptions, Permissions } from './engine/pdfium'
 import type { Edit } from './viewer/protocol'
-import { saveCopy } from './viewer/platform'
+import { OFFICE_EXTENSIONS, convertFile, isDesktop, isOfficeFile, saveCopy, withExtension } from './viewer/platform'
 import { printDocument } from './viewer/print'
 
 const TOOLS: { tool: Tool; label: string; key: string }[] = [
@@ -188,7 +188,22 @@ export default function App() {
   )
 
   const openFile = useCallback(
-    async (f: File) => openBytes(f.name, new Uint8Array(await f.arrayBuffer())),
+    async (f: File) => {
+      const bytes = new Uint8Array(await f.arrayBuffer())
+      if (!isOfficeFile(f.name)) return openBytes(f.name, bytes)
+      if (!isDesktop) {
+        setError(`${f.name} is an Office file. Converting Word, Excel and PowerPoint files to PDF needs the PDF Pro desktop app.`)
+        return
+      }
+      setBusy(`Converting ${f.name} to PDF…`)
+      try {
+        const pdf = await convertFile(f.name, bytes, 'pdf')
+        await openBytes(withExtension(f.name, 'pdf'), pdf)
+      } catch (err) {
+        setError(describeError(err))
+        setBusy(null)
+      }
+    },
     [openBytes],
   )
 
@@ -346,6 +361,29 @@ export default function App() {
       setNotice(`Text recognised on ${withText.length} page${withText.length === 1 ? '' : 's'}. You can now search, select and copy it.`)
     } catch (err) {
       handleEngineError(err)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const exportWord = async () => {
+    if (!doc || !file) return
+    setNotice(null)
+    if (!isDesktop) {
+      setNotice('Exporting to Word needs the PDF Pro desktop app, which converts files with LibreOffice on your computer.')
+      return
+    }
+    if (doc.security.encrypted) {
+      setNotice('Remove the password protection first: Word conversion needs an unprotected file.')
+      return
+    }
+    setBusy('Converting to Word…')
+    try {
+      const docx = await convertFile(file.name, await doc.save(), 'docx')
+      setBusy(null)
+      if (await saveCopy(withExtension(file.name, 'docx'), docx, 'docx')) setNotice('Saved as a Word document. Check the layout: complex pages may need tidying.')
+    } catch (err) {
+      setError(describeError(err))
     } finally {
       setBusy(null)
     }
@@ -617,7 +655,7 @@ export default function App() {
         <input
           ref={fileInput}
           type="file"
-          accept="application/pdf,.pdf"
+          accept={['application/pdf', '.pdf', ...(isDesktop ? OFFICE_EXTENSIONS.map((e) => `.${e}`) : [])].join(',')}
           hidden
           onChange={(e) => {
             const f = e.target.files?.[0]
@@ -832,6 +870,9 @@ export default function App() {
           <button onClick={() => setCompressing(true)}>Reduce file size</button>
           <button onClick={() => void recognize()} disabled={!!busy}>
             Recognise text (OCR)
+          </button>
+          <button onClick={() => void exportWord()} disabled={!!busy} title={isDesktop ? undefined : 'Needs the PDF Pro desktop app'}>
+            Export to Word
           </button>
           {pageTextKinds.includes('watermark') && (
             <button onClick={() => void runTool('Removing…', { kind: 'page-text-remove', kinds: ['watermark'] }, 'Watermarks removed.')}>
