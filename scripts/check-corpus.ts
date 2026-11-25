@@ -22,6 +22,7 @@ const known: Record<string, string> = JSON.parse(readFileSync(new URL('./known-c
 let engine = await PdfEngine.create(wasm)
 const counts = { opened: 0, rejected: 0, knownCrash: 0, crashed: 0 }
 const redaction = { tried: 0, failed: [] as string[] }
+const textEdits = { tried: 0, failed: [] as string[] }
 const crashes: string[] = []
 const started = Date.now()
 
@@ -43,6 +44,20 @@ for (const name of files) {
       doc.compress({ maxDpi: 150, quality: 70 })
       doc.save()
       void doc.security
+      // Edit text: read page 1's lines and retype the first one as itself.
+      if (doc.pageCount > 0 && !doc.security.encrypted) {
+        const lines = doc.textLines(0)
+        const first = lines.find((l) => l.text.trim())
+        if (first) {
+          try {
+            doc.replaceText(0, first.objects, first.text, first.text)
+          } catch (err) {
+            if (err instanceof PdfError && err.code === 'crash') throw err
+            textEdits.failed.push(`${name}: ${err instanceof Error ? err.message : String(err)}`)
+          }
+          textEdits.tried++
+        }
+      }
       // Redact the middle of page 1, then sweep: the result must still open with every page.
       if (doc.pageCount > 0 && !doc.security.encrypted) {
         redaction.tried++
@@ -92,4 +107,6 @@ if (missingKnown.length) console.log(`  (not in corpus: ${missingKnown.join(', '
 for (const line of crashes) console.log(`  crash: ${line}`)
 console.log(`Redaction: ${redaction.tried - redaction.failed.length} of ${redaction.tried} files redacted, swept and reopened`)
 for (const line of redaction.failed) console.log(`  redaction failed: ${line}`)
-process.exitCode = counts.crashed || redaction.failed.length ? 1 : 0
+console.log(`Edit text: ${textEdits.tried - textEdits.failed.length} of ${textEdits.tried} files had a line retyped`)
+for (const line of textEdits.failed) console.log(`  text edit failed: ${line}`)
+process.exitCode = counts.crashed || redaction.failed.length || textEdits.failed.length ? 1 : 0

@@ -3,7 +3,7 @@
 // files never blocks scrolling or typing. Requests are handled one at a time;
 // a pending request can be cancelled (e.g. a page scrolled out of view).
 import wasmUrl from '@embedpdf/pdfium/pdfium.wasm?url'
-import { PdfEngine, PdfError, type CompressResult, type PdfDocument } from '../engine/pdfium'
+import { PdfEngine, PdfError, type CompressResult, type PdfDocument, type ReplaceResult } from '../engine/pdfium'
 import { dropUnreachable } from '../engine/sweep'
 import type { DocInfo, Edit, Request, Response } from './protocol'
 
@@ -59,7 +59,7 @@ function info(e: OpenDoc): DocInfo {
   return { pageCount: e.doc.pageCount, sizes: e.doc.pageSizes(), outline, undoDepth: e.undo.length, hasForm: e.doc.hasForm, security: e.doc.security }
 }
 
-function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit): CompressResult | void {
+function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit): CompressResult | ReplaceResult | void {
   switch (edit.kind) {
     case 'rotate':
       return d.rotatePages(edit.pages, edit.degrees)
@@ -105,6 +105,8 @@ function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit): CompressResult |
       if (added === 0) throw new PdfError('unknown', 'No text was found on these pages')
       return
     }
+    case 'text':
+      return d.replaceText(edit.pageIndex, edit.objects, edit.expected, edit.text)
     case 'redact':
       if (d.security.encrypted) throw new PdfError('unknown', 'Remove the password protection first, then redact')
       if (d.redact(edit.marks).areas === 0) throw new PdfError('unknown', 'There was nothing to redact')
@@ -125,9 +127,11 @@ async function handle(req: Request) {
       const e = entry(req.docId)
       const before = { bytes: e.doc.save(), password: e.password }
       let compressed: DocInfo['compressed']
+      let replaced: DocInfo['replaced']
       try {
         const result = applyEdit(pdf, e.doc, req.edit)
-        if (req.edit.kind === 'compress' && result) {
+        if (req.edit.kind === 'text' && result) replaced = result as ReplaceResult
+        if (req.edit.kind === 'compress' && result && 'images' in result) {
           if (result.images === 0) throw new PdfError('unknown', 'The images in this file are already small, so there is nothing to compress')
           compressed = { images: result.images, before: before.bytes.length, after: e.doc.save().length }
         }
@@ -145,7 +149,7 @@ async function handle(req: Request) {
       }
       e.undo.push(before)
       if (e.undo.length > UNDO_LIMIT) e.undo.shift()
-      return reply({ id: req.id, ok: true, value: { ...info(e), compressed } })
+      return reply({ id: req.id, ok: true, value: { ...info(e), compressed, replaced } })
     }
     case 'undo': {
       const e = entry(req.docId)
@@ -163,6 +167,8 @@ async function handle(req: Request) {
       for (let i = 0; i < d.pageCount; i++) if (d.needsOcr(i)) pages.push(i)
       return reply({ id: req.id, ok: true, value: pages })
     }
+    case 'textLines':
+      return reply({ id: req.id, ok: true, value: doc(req.docId).textLines(req.pageIndex) })
     case 'pageTextKinds':
       return reply({ id: req.id, ok: true, value: doc(req.docId).pageTextKinds() })
     case 'unlockOwner': {

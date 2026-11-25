@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { PdfError, type Annotation, type NewAnnotation, type OutlineItem, type Point, type Rect, type SearchHit, type TextLayout } from './engine/pdfium'
+import { PdfError, type Annotation, type NewAnnotation, type OutlineItem, type Point, type Rect, type SearchHit, type TextLayout, type TextLine } from './engine/pdfium'
 import { AnnotLayer, MARKUP_TOOLS, type MarkupTool, type TextSelection, type Tool } from './viewer/AnnotLayer'
 import { CommentsPanel } from './viewer/CommentsPanel'
 import { FormLayer } from './viewer/FormLayer'
@@ -19,6 +19,7 @@ import { OFFICE_EXTENSIONS, convertFile, isDesktop, isOfficeFile, saveCopy, with
 import { printDocument } from './viewer/print'
 import { RedactLayer, type RedactMark } from './viewer/RedactLayer'
 import { RedactDialog } from './viewer/RedactDialog'
+import { EditTextLayer } from './viewer/EditTextLayer'
 
 const TOOLS: { tool: Tool; label: string; key: string }[] = [
   { tool: 'select', label: 'Select', key: 'v' },
@@ -112,7 +113,7 @@ export default function App() {
   const [hits, setHits] = useState<SearchHit[]>([])
   const [activeHit, setActiveHit] = useState(0)
   const [dragging, setDragging] = useState(false)
-  const [mode, setMode] = useState<'view' | 'comment' | 'sign' | 'tools' | 'redact' | 'organize'>('view')
+  const [mode, setMode] = useState<'view' | 'comment' | 'sign' | 'edit' | 'tools' | 'redact' | 'organize'>('view')
   const [signTool, setSignTool] = useState<Tool>('freetext')
   const [signColor, setSignColor] = useState('#1d1d1b')
   const [fields, setFields] = useState<FormField[] | null>(null)
@@ -294,6 +295,7 @@ export default function App() {
   // The Tools bar offers to remove watermarks, headers and footers only when there are some.
   const toolsMode = mode === 'tools' && !!doc
   const redactMode = mode === 'redact' && !!doc
+  const editMode = mode === 'edit' && !!doc
   useEffect(() => {
     if (!toolsMode || !doc) return
     let live = true
@@ -390,6 +392,26 @@ export default function App() {
       if (await saveCopy(withExtension(file.name, 'docx'), docx, 'docx')) setNotice('Saved as a Word document. Check the layout: complex pages may need tidying.')
     } catch (err) {
       setError(describeError(err))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const editText = async (line: TextLine, text: string) => {
+    setBusy('Updating text…')
+    setNotice(null)
+    try {
+      const next = await applyEdit({ kind: 'text', pageIndex: line.pageIndex, objects: line.objects, expected: line.text, text })
+      const sub = next.replaced?.substitute
+      setNotice(
+        !text.trim()
+          ? 'Line deleted.'
+          : sub
+            ? `The file's own font doesn't have every letter you typed, so this line now uses ${sub.replace('-', ' ')}.`
+            : 'Text updated. Save a copy to keep it.',
+      )
+    } catch (err) {
+      handleEngineError(err)
     } finally {
       setBusy(null)
     }
@@ -715,6 +737,9 @@ export default function App() {
             <button role="tab" aria-selected={mode === 'sign'} onClick={() => setMode('sign')}>
               Fill &amp; Sign
             </button>
+            <button role="tab" aria-selected={mode === 'edit'} onClick={() => setMode('edit')}>
+              Edit text
+            </button>
             <button role="tab" aria-selected={mode === 'tools'} onClick={() => setMode('tools')}>
               Tools
             </button>
@@ -952,6 +977,17 @@ export default function App() {
         </div>
       )}
 
+      {editMode && doc && (
+        <div className="comment-bar" role="toolbar" aria-label="Edit text">
+          <span className="count">Click any line to change it. Enter saves, Esc cancels, and an empty line is deleted.</span>
+          {notice && (
+            <span className="count" role="status">
+              {notice}
+            </span>
+          )}
+        </div>
+      )}
+
       {redactMode && doc && (
         <div className="comment-bar" role="toolbar" aria-label="Redaction">
           <span className="count">Drag over anything to remove it for good.</span>
@@ -1085,6 +1121,7 @@ export default function App() {
                   onMove={moveAnnot}
                   onPlaceSignature={(pageIndex, at, kind) => void placeSignature(kind, pageIndex, at)}
                 />
+                {editMode && <EditTextLayer doc={doc} pageIndex={i} zoom={zoom} busy={!!busy} onEdit={(l, t) => void editText(l, t)} onError={handleEngineError} />}
                 {redactMode && (
                   <RedactLayer
                     pageIndex={i}

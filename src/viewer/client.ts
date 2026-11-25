@@ -1,5 +1,5 @@
 // Main-thread handle on the PDF engine worker.
-import { PdfError, type Annotation, type FormField, type OutlineItem, type PageSize, type PageTextKind, type PdfErrorCode, type SearchHit, type Security, type TextLayout } from '../engine/pdfium'
+import { PdfError, type Annotation, type FormField, type OutlineItem, type PageSize, type PageTextKind, type PdfErrorCode, type SearchHit, type Security, type TextLayout, type TextLine } from '../engine/pdfium'
 import type { BytesResult, DocInfo, Edit, OpenResult, RenderResult, Request, Response, TextLayoutResult } from './protocol'
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void }
@@ -69,6 +69,8 @@ export class DocHandle {
   readonly security: Security
   /** Set on the handle a compress edit returns. */
   readonly compressed?: DocInfo['compressed']
+  /** Set on the handle a text edit returns. */
+  readonly replaced?: DocInfo['replaced']
   /** Bumped on every edit, so cached page images can tell they are stale. */
   readonly version: number
   private readonly client: EngineClient
@@ -83,6 +85,7 @@ export class DocHandle {
     this.hasForm = r.hasForm
     this.security = r.security
     this.compressed = r.compressed
+    this.replaced = r.replaced
     this.version = version
   }
 
@@ -121,6 +124,11 @@ export class DocHandle {
   /** Pages with no text layer, which probably need OCR. */
   ocrCandidates(): Promise<number[]> {
     return this.client.request<number[]>({ type: 'ocrCandidates', docId: this.id })
+  }
+
+  /** A page's text, grouped into editable lines. */
+  textLines(pageIndex: number): Promise<TextLine[]> {
+    return this.client.request<TextLine[]>({ type: 'textLines', docId: this.id, pageIndex })
   }
 
   /** Which kinds of watermark, header or footer the document has. */
