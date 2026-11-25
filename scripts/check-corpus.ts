@@ -8,6 +8,7 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { PdfEngine, PdfError } from '../src/engine/pdfium'
 import { dropUnreachable } from '../src/engine/sweep'
+import { compareWords, wordsOf } from '../src/engine/compare'
 
 const require = createRequire(import.meta.url)
 const dir = join(process.cwd(), 'corpus')
@@ -23,6 +24,7 @@ let engine = await PdfEngine.create(wasm)
 const counts = { opened: 0, rejected: 0, knownCrash: 0, crashed: 0 }
 const redaction = { tried: 0, failed: [] as string[] }
 const textEdits = { tried: 0, failed: [] as string[] }
+const comparisons = { tried: 0, words: 0, ms: 0, failed: [] as string[] }
 const crashes: string[] = []
 const started = Date.now()
 
@@ -36,6 +38,21 @@ for (const name of files) {
         doc.renderPage(0, Math.min(1, 1000 / Math.max(width, height, 1)))
         doc.pageText(0)
         doc.textLayout(0)
+      }
+      // Compare: a file against a second copy of itself must show no differences.
+      if (doc.pageCount > 0) {
+        comparisons.tried++
+        const copy = engine.open(readFileSync(join(dir, name)))
+        try {
+          const t = Date.now()
+          const words = (d: typeof doc) => wordsOf(Array.from({ length: d.pageCount }, (_, i) => d.textLayout(i)))
+          const r = compareWords(words(doc), words(copy))
+          comparisons.ms += Date.now() - t
+          comparisons.words += r.words.after
+          if (r.changes.length) comparisons.failed.push(`${name}: ${r.changes.length} differences against itself`)
+        } finally {
+          copy.close()
+        }
       }
       // Comment mode reads every annotation in the file, so real-world ones must not crash it.
       doc.allAnnotations()
@@ -109,4 +126,6 @@ console.log(`Redaction: ${redaction.tried - redaction.failed.length} of ${redact
 for (const line of redaction.failed) console.log(`  redaction failed: ${line}`)
 console.log(`Edit text: ${textEdits.tried - textEdits.failed.length} of ${textEdits.tried} files had a line retyped`)
 for (const line of textEdits.failed) console.log(`  text edit failed: ${line}`)
-process.exitCode = counts.crashed || redaction.failed.length || textEdits.failed.length ? 1 : 0
+console.log(`Compare: ${comparisons.tried - comparisons.failed.length} of ${comparisons.tried} files matched themselves (${comparisons.words.toLocaleString('en-US')} words in ${(comparisons.ms / 1000).toFixed(1)}s)`)
+for (const line of comparisons.failed) console.log(`  compare failed: ${line}`)
+process.exitCode = counts.crashed || redaction.failed.length || textEdits.failed.length || comparisons.failed.length ? 1 : 0

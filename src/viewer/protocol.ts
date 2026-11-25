@@ -20,6 +20,7 @@ import type {
   TextLayout,
 } from '../engine/pdfium'
 import type { Rect, ReplaceResult, TextLine } from '../engine/pdfium'
+import type { Comparison } from '../engine/compare'
 
 export type { TextLayout }
 
@@ -43,6 +44,8 @@ export type Request =
   /** Pages with no text, which probably need OCR. */
   | { id: number; type: 'ocrCandidates'; docId: number }
   | { id: number; type: 'textLines'; docId: number; pageIndex: number }
+  /** Word-level differences from `otherDocId` (the older version) to `docId`. */
+  | { id: number; type: 'compare'; docId: number; otherDocId: number }
   /** Enter the permissions password, so security can be changed. */
   | { id: number; type: 'unlockOwner'; docId: number; password: string }
 
@@ -108,5 +111,5 @@ export interface RenderResult {
 }
 
 export type Response =
-  | { id: number; ok: true; value: OpenResult | DocInfo | RenderResult | BytesResult | SearchHit[] | Annotation[] | FormField[] | TextLayoutResult | PageTextKind[] | TextLine[] | number[] | null }
+  | { id: number; ok: true; value: OpenResult | DocInfo | RenderResult | BytesResult | SearchHit[] | Annotation[] | FormField[] | TextLayoutResult | PageTextKind[] | TextLine[] | Comparison | number[] | null }
   | { id: number; ok: false; error: { code: PdfErrorCode | 'cancelled'; message: string } }
