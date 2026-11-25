@@ -12,9 +12,10 @@ let wasm: Promise<ArrayBuffer> | null = null
 let engine: Promise<PdfEngine> | null = null
 interface OpenDoc {
   doc: PdfDocument
+  /** Opens the current file; the permissions password when the user gave it. */
   password: string
-  /** Saved copies from before each edit, newest last. */
-  undo: Uint8Array[]
+  /** Saved copies from before each edit, newest last, with the password each needs. */
+  undo: { bytes: Uint8Array; password: string }[]
 }
 const docs = new Map<number, OpenDoc>()
 let nextDocId = 1
@@ -54,7 +55,7 @@ function info(e: OpenDoc): DocInfo {
   } catch (err) {
     if (err instanceof PdfError && err.code === 'crash') throw err
   }
-  return { pageCount: e.doc.pageCount, sizes: e.doc.pageSizes(), outline, undoDepth: e.undo.length, hasForm: e.doc.hasForm }
+  return { pageCount: e.doc.pageCount, sizes: e.doc.pageSizes(), outline, undoDepth: e.undo.length, hasForm: e.doc.hasForm, security: e.doc.security }
 }
 
 function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit) {
@@ -86,6 +87,15 @@ function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit) {
     case 'stamp':
       d.addImageStamp(edit.pageIndex, edit.rect, edit.image, { id: edit.id, author: edit.author, label: edit.label })
       return
+    case 'page-text':
+      return d.addPageText(edit.items, edit.options)
+    case 'page-text-remove':
+      if (d.removePageText(edit.kinds) === 0) throw new PdfError('unknown', 'There was nothing to remove')
+      return
+    case 'protect':
+      return d.protect(edit.openPassword, edit.ownerPassword, edit.permissions)
+    case 'unprotect':
+      return d.unprotect()
   }
 }
 
@@ -100,9 +110,12 @@ async function handle(req: Request) {
     }
     case 'edit': {
       const e = entry(req.docId)
-      const before = e.doc.save()
+      const before = { bytes: e.doc.save(), password: e.password }
       try {
         applyEdit(pdf, e.doc, req.edit)
+        // Encryption only happens on save: reopen so what the viewer shows is what will be saved.
+        if (req.edit.kind === 'protect') reload(pdf, e, req.edit.ownerPassword || req.edit.openPassword)
+        if (req.edit.kind === 'unprotect') reload(pdf, e, '')
       } catch (err) {
         // A failed edit may have half-applied; put the document back as it was.
         if (!(err instanceof PdfError && err.code === 'crash')) restore(pdf, e, before)
@@ -121,6 +134,14 @@ async function handle(req: Request) {
     case 'save': {
       const bytes = doc(req.docId).save()
       return reply({ id: req.id, ok: true, value: { bytes } }, [bytes.buffer])
+    }
+    case 'pageTextKinds':
+      return reply({ id: req.id, ok: true, value: doc(req.docId).pageTextKinds() })
+    case 'unlockOwner': {
+      const e = entry(req.docId)
+      e.doc.unlockOwner(req.password)
+      e.password = req.password
+      return reply({ id: req.id, ok: true, value: info(e) })
     }
     case 'formFields':
       return reply({ id: req.id, ok: true, value: doc(req.docId).allFormFields() })
@@ -150,10 +171,16 @@ async function handle(req: Request) {
   }
 }
 
-function restore(pdf: PdfEngine, e: OpenDoc, bytes: Uint8Array) {
-  const next = pdf.open(bytes, e.password)
+function restore(pdf: PdfEngine, e: OpenDoc, snapshot: { bytes: Uint8Array; password: string }) {
+  const next = pdf.open(snapshot.bytes, snapshot.password)
   e.doc.close()
   e.doc = next
+  e.password = snapshot.password
+}
+
+/** Saves and reopens the document, e.g. after its password changed. */
+function reload(pdf: PdfEngine, e: OpenDoc, password: string) {
+  restore(pdf, e, { bytes: e.doc.save(), password })
 }
 
 async function drain() {

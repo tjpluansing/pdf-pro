@@ -7,6 +7,11 @@ import type {
   NewAnnotation,
   OutlineItem,
   PageSize,
+  PageText,
+  PageTextKind,
+  PageTextOptions,
+  Permissions,
+  Security,
   PdfErrorCode,
   SearchHit,
   StampImage,
@@ -31,6 +36,10 @@ export type Request =
   | { id: number; type: 'annotations'; docId: number }
   | { id: number; type: 'textLayout'; docId: number; pageIndex: number }
   | { id: number; type: 'formFields'; docId: number }
+  /** Which kinds of watermark, header or footer the document has. */
+  | { id: number; type: 'pageTextKinds'; docId: number }
+  /** Enter the permissions password, so security can be changed. */
+  | { id: number; type: 'unlockOwner'; docId: number; password: string }
 
 /** A change to the open document. Page numbers are 0-based indexes. */
 export type Edit =
@@ -44,6 +53,11 @@ export type Edit =
   | { kind: 'annot-remove'; pageIndex: number; id: string }
   | { kind: 'field'; pageIndex: number; index: number; value: FieldValue }
   | { kind: 'stamp'; pageIndex: number; id: string; rect: Rect; image: StampImage; author?: string; label?: string }
+  | { kind: 'page-text'; items: PageText[]; options?: PageTextOptions }
+  | { kind: 'page-text-remove'; kinds: PageTextKind[] }
+  /** Applies on save; the document is saved and reopened at once so its state is current. */
+  | { kind: 'protect'; openPassword: string; ownerPassword: string; permissions: Permissions }
+  | { kind: 'unprotect' }
 
 export interface DocInfo {
   pageCount: number
@@ -53,6 +67,7 @@ export interface DocInfo {
   undoDepth: number
   /** The file has fillable form fields. */
   hasForm: boolean
+  security: Security
 }
 
 export interface OpenResult extends DocInfo {
@@ -77,5 +92,5 @@ export interface RenderResult {
 }
 
 export type Response =
-  | { id: number; ok: true; value: OpenResult | DocInfo | RenderResult | BytesResult | SearchHit[] | Annotation[] | FormField[] | TextLayoutResult | null }
+  | { id: number; ok: true; value: OpenResult | DocInfo | RenderResult | BytesResult | SearchHit[] | Annotation[] | FormField[] | TextLayoutResult | PageTextKind[] | null }
   | { id: number; ok: false; error: { code: PdfErrorCode | 'cancelled'; message: string } }

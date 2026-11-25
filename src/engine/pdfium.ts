@@ -23,7 +23,21 @@ import {
 
 export type { Annotation, AnnotationPatch, AnnotKind, NewAnnotation, Point, TextLayout } from './annotations'
 import { FormEnv, addImageStamp, readFields, setField, type FieldValue, type FormField, type StampImage } from './forms'
+import {
+  addPageText,
+  fillPlaceholders,
+  pageTextKinds,
+  permissionBits,
+  permissionsFrom,
+  removePageText,
+  type PageText,
+  type PageTextKind,
+  type PageTextOptions,
+  type Permissions,
+  type Security,
+} from './stamp'
 export type { FieldType, FieldValue, FormField, StampImage } from './forms'
+export type { PageText, PageTextKind, PageTextOptions, Permissions, Security, StandardFont } from './stamp'
 
 /** FPDF_ANNOT: draw annotations. FPDF_REVERSE_BYTE_ORDER: emit RGBA instead of BGRA. */
 const RENDER_FLAGS = 0x01 | 0x10
@@ -487,6 +501,89 @@ export class PdfDocument {
       addImageStamp(this.m, this.handle, page, rect, image, id, (annot) => setCommonFields(this.m, annot, author, label)),
     )
     return id
+  }
+
+  // ---- Watermarks, headers, footers and passwords -----------------------------
+
+  /** Stamps text on pages: watermarks, headers, footers and page numbers. */
+  addPageText(items: PageText[], { pages, startAt = 1, date = new Date().toLocaleDateString() }: PageTextOptions = {}): void {
+    const indexes = pages ?? Array.from({ length: this.pageCount }, (_, i) => i)
+    indexes.forEach((i) => this.checkPage(i))
+    if (!items.some((t) => t.text.trim())) throw new PdfError('unknown', 'Type some text to add')
+    for (const i of indexes) {
+      this.withPage(i, (page) => {
+        let changed = false
+        for (const item of items) {
+          const text = fillPlaceholders(item.text, i + startAt, this.pageCount + startAt - 1, date)
+          changed = addPageText(this.m, this.handle, page, item, text) || changed
+        }
+        if (changed && !this.m.FPDFPage_GenerateContent(page)) throw new PdfError('unknown', 'PDFium could not update the page')
+      })
+    }
+  }
+
+  /** Removes watermarks, headers or footers; returns how many pages had any. */
+  removePageText(kinds: PageTextKind[]): number {
+    let pages = 0
+    for (let i = 0; i < this.pageCount; i++) {
+      this.withPage(i, (page) => {
+        if (removePageText(this.m, page, kinds) > 0) {
+          pages++
+          this.m.FPDFPage_GenerateContent(page)
+        }
+      })
+    }
+    return pages
+  }
+
+  /** Which kinds of watermark, header or footer the document has. */
+  pageTextKinds(): PageTextKind[] {
+    const found = new Set<PageTextKind>()
+    for (let i = 0; i < this.pageCount; i++) this.withPage(i, (page) => pageTextKinds(this.m, page).forEach((k) => found.add(k)))
+    return [...found]
+  }
+
+  get security(): Security {
+    if (this.closed) throw new PdfError('unknown', 'Document is closed')
+    const encrypted = !!this.m.EPDF_IsEncrypted(this.handle)
+    return {
+      encrypted,
+      ownerUnlocked: !encrypted || !!this.m.EPDF_IsOwnerUnlocked(this.handle),
+      permissions: permissionsFrom(encrypted ? this.m.FPDF_GetDocPermissions(this.handle) : -1),
+    }
+  }
+
+  /** Unlocks changing security on a file opened with its open password. */
+  unlockOwner(ownerPassword: string): void {
+    if (!this.m.EPDF_UnlockOwnerPermissions(this.handle, ownerPassword)) {
+      throw new PdfError('password', 'That is not the permissions password')
+    }
+  }
+
+  /**
+   * Encrypts the file (AES-256) when it is next saved. An empty open password
+   * lets anyone open it, with the permissions applied; the permissions
+   * password lifts them.
+   */
+  protect(openPassword: string, ownerPassword: string, permissions: Permissions): void {
+    this.requireOwner()
+    const owner = ownerPassword || openPassword
+    if (!owner) throw new PdfError('unknown', 'Set an open password or a permissions password')
+    if (!this.m.EPDF_SetEncryption(this.handle, openPassword, owner, permissionBits(permissions))) {
+      throw new PdfError('unknown', 'PDFium could not set the password')
+    }
+  }
+
+  /** Removes the password and restrictions when the file is next saved. */
+  unprotect(): void {
+    this.requireOwner()
+    if (!this.m.EPDF_RemoveEncryption(this.handle)) throw new PdfError('unknown', 'PDFium could not remove the password')
+  }
+
+  private requireOwner() {
+    if (!this.security.ownerUnlocked) {
+      throw new PdfError('security', 'Enter the permissions password to change this file\'s security')
+    }
   }
 
   /** Characters and their boxes, for selecting text on a page. */

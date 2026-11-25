@@ -9,6 +9,9 @@ import type { FieldValue, FormField } from './engine/pdfium'
 import { EngineClient, type DocHandle } from './viewer/client'
 import { Organize } from './viewer/Organize'
 import { PageCanvas } from './viewer/PageCanvas'
+import { ProtectDialog } from './viewer/ProtectDialog'
+import { StampDialog, type StampKind } from './viewer/StampDialog'
+import type { PageText, PageTextKind, PageTextOptions, Permissions } from './engine/pdfium'
 import type { Edit } from './viewer/protocol'
 import { saveCopy } from './viewer/platform'
 import { printDocument } from './viewer/print'
@@ -105,12 +108,16 @@ export default function App() {
   const [hits, setHits] = useState<SearchHit[]>([])
   const [activeHit, setActiveHit] = useState(0)
   const [dragging, setDragging] = useState(false)
-  const [mode, setMode] = useState<'view' | 'comment' | 'sign' | 'organize'>('view')
+  const [mode, setMode] = useState<'view' | 'comment' | 'sign' | 'tools' | 'organize'>('view')
   const [signTool, setSignTool] = useState<Tool>('freetext')
   const [signColor, setSignColor] = useState('#1d1d1b')
   const [fields, setFields] = useState<FormField[] | null>(null)
   /** Where to put a signature once the user has made one. */
   const [signing, setSigning] = useState<{ kind: SignatureKind; place?: { pageIndex: number; at?: Point; fit?: Rect } } | null>(null)
+  const [stamp, setStamp] = useState<StampKind | null>(null)
+  const [protecting, setProtecting] = useState(false)
+  const [pageTextKinds, setPageTextKinds] = useState<PageTextKind[]>([])
+  const [notice, setNotice] = useState<string | null>(null)
   const [tool, setTool] = useState<Tool>('select')
   const [colors, setColors] = useState(DEFAULT_COLORS)
   const [annots, setAnnots] = useState<Annotation[] | null>(null)
@@ -261,6 +268,52 @@ export default function App() {
     [doc],
   )
 
+  // The Tools bar offers to remove watermarks, headers and footers only when there are some.
+  const toolsMode = mode === 'tools' && !!doc
+  useEffect(() => {
+    if (!toolsMode || !doc) return
+    let live = true
+    doc.pageTextKinds().then((k) => live && setPageTextKinds(k), handleEngineError)
+    return () => {
+      live = false
+    }
+  }, [toolsMode, doc, handleEngineError])
+
+  const runTool = async (label: string, edit: Edit, done: string) => {
+    setBusy(label)
+    setNotice(null)
+    try {
+      await applyEdit(edit)
+      setNotice(done)
+    } catch (err) {
+      handleEngineError(err)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const addPageText = (items: PageText[], options: PageTextOptions) => {
+    setStamp(null)
+    const n = options.pages?.length ?? doc?.pageCount ?? 0
+    void runTool('Adding…', { kind: 'page-text', items, options }, `Added to ${n} page${n === 1 ? '' : 's'}. Save a copy to keep it.`)
+  }
+
+  const protect = (openPassword: string, ownerPassword: string, permissions: Permissions) => {
+    setProtecting(false)
+    const what = openPassword ? 'needs a password to open' : 'has restrictions'
+    void runTool('Encrypting…', { kind: 'protect', openPassword, ownerPassword, permissions }, `The file now ${what}. Save a copy to keep it.`)
+  }
+
+  const unlockOwner = async (password: string) => {
+    if (!doc) return
+    try {
+      setDoc(await doc.unlockOwner(password))
+      setNotice('Unlocked. You can now change or remove the protection.')
+    } catch (err) {
+      handleEngineError(err)
+    }
+  }
+
   // Comment and Fill & Sign modes list every annotation; reload the list after each change.
   const commenting = mode === 'comment' && !!doc
   const signMode = mode === 'sign' && !!doc
@@ -401,6 +454,7 @@ export default function App() {
     try {
       setDoc(await doc.undo())
       setHits([])
+      setNotice(null)
       setSelectedId(null)
     } catch (err) {
       handleEngineError(err)
@@ -544,6 +598,9 @@ export default function App() {
             </button>
             <button role="tab" aria-selected={mode === 'sign'} onClick={() => setMode('sign')}>
               Fill &amp; Sign
+            </button>
+            <button role="tab" aria-selected={mode === 'tools'} onClick={() => setMode('tools')}>
+              Stamp &amp; Protect
             </button>
             <button role="tab" aria-selected={mode === 'organize'} onClick={() => setMode('organize')}>
               Organize pages
@@ -719,6 +776,58 @@ export default function App() {
           </span>
         </div>
       )}
+
+      {toolsMode && doc && (
+        <div className="comment-bar" role="toolbar" aria-label="Stamp and protect tools">
+          <button onClick={() => setStamp('watermark')}>Watermark</button>
+          <button onClick={() => setStamp('header-footer')}>Header &amp; footer</button>
+          <button onClick={() => setStamp('page-numbers')}>Page numbers</button>
+          {pageTextKinds.includes('watermark') && (
+            <button onClick={() => void runTool('Removing…', { kind: 'page-text-remove', kinds: ['watermark'] }, 'Watermarks removed.')}>
+              Remove watermarks
+            </button>
+          )}
+          {(pageTextKinds.includes('header') || pageTextKinds.includes('footer')) && (
+            <button onClick={() => void runTool('Removing…', { kind: 'page-text-remove', kinds: ['header', 'footer'] }, 'Headers and footers removed.')}>
+              Remove headers &amp; footers
+            </button>
+          )}
+          <span className="sel-actions">
+            {!doc.security.encrypted ? (
+              <button onClick={() => setProtecting(true)}>Protect with password</button>
+            ) : doc.security.ownerUnlocked ? (
+              <>
+                <span className="count">🔒 Protected</span>
+                <button onClick={() => setProtecting(true)}>Change protection</button>
+                <button onClick={() => void runTool('Removing protection…', { kind: 'unprotect' }, 'Protection removed. Save a copy to keep it.')}>
+                  Remove protection
+                </button>
+              </>
+            ) : (
+              <form
+                className="inline-form"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  const pw = String(new FormData(e.currentTarget).get('owner') ?? '')
+                  if (pw) void unlockOwner(pw)
+                }}
+              >
+                <span className="count">🔒 Protected. To change it, enter the permissions password:</span>
+                <input name="owner" type="password" autoComplete="off" aria-label="Permissions password" />
+                <button type="submit">Unlock</button>
+              </form>
+            )}
+          </span>
+          {notice && (
+            <span className="count" role="status">
+              {notice}
+            </span>
+          )}
+        </div>
+      )}
+
+      {stamp && doc && <StampDialog kind={stamp} pageCount={doc.pageCount} onApply={addPageText} onCancel={() => setStamp(null)} />}
+      {protecting && doc && <ProtectDialog permissions={doc.security.permissions} onApply={protect} onCancel={() => setProtecting(false)} />}
 
       {signing && (
         <SignatureDialog
