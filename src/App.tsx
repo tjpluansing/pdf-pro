@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PdfError, type OutlineItem, type SearchHit } from './engine/pdfium'
 import { EngineClient, type DocHandle } from './viewer/client'
+import { Organize } from './viewer/Organize'
 import { PageCanvas } from './viewer/PageCanvas'
+import type { Edit } from './viewer/protocol'
 import { saveCopy } from './viewer/platform'
 import { printDocument } from './viewer/print'
 
@@ -41,12 +43,31 @@ export default function App() {
   const [hits, setHits] = useState<SearchHit[]>([])
   const [activeHit, setActiveHit] = useState(0)
   const [dragging, setDragging] = useState(false)
+  const [mode, setMode] = useState<'view' | 'organize'>('view')
+  /** doc.version at the last open or save; anything newer is unsaved. */
+  const [savedVersion, setSavedVersion] = useState(0)
   const scroller = useRef<HTMLDivElement>(null)
   const searchBox = useRef<HTMLInputElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
-  // Close the old document when it is replaced or the app unmounts.
-  useEffect(() => () => doc?.close(), [doc])
+  // Close the old document when another file replaces it or the app unmounts.
+  // Edits hand back a new handle for the same document, which must stay open.
+  const docId = doc?.id
+  const docRef = useRef(doc)
+  docRef.current = doc
+  useEffect(() => {
+    const opened = docRef.current
+    return () => opened?.close()
+  }, [docId])
+
+  const dirty = !!doc && doc.version !== savedVersion
+
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
 
   const handleEngineError = useCallback((err: unknown) => {
     setError(describeError(err))
@@ -63,6 +84,7 @@ export default function App() {
         setLocked(null)
         setFile({ name, bytes })
         setDoc(next)
+        setSavedVersion(next.version)
         setHits([])
         setQuery('')
         setCurrentPage(0)
@@ -151,8 +173,44 @@ export default function App() {
     scrollToPage(hits[next].pageIndex)
   }
 
-  const download = () => {
-    if (file) saveCopy(file.name, file.bytes).catch((err) => setError(describeError(err)))
+  const applyEdit = useCallback(
+    async (edit: Edit) => {
+      if (!doc) throw new Error('No document is open')
+      const next = await doc.edit(edit)
+      setDoc(next)
+      setHits([])
+      return next
+    },
+    [doc],
+  )
+
+  const undo = async () => {
+    if (!doc || doc.undoDepth === 0 || busy) return
+    try {
+      setDoc(await doc.undo())
+      setHits([])
+    } catch (err) {
+      handleEngineError(err)
+    }
+  }
+
+  const saveFile = useCallback(
+    (name: string, bytes: Uint8Array) => saveCopy(name, bytes),
+    [],
+  )
+
+  const download = async () => {
+    if (!file || !doc) return
+    try {
+      if (!dirty) return await saveCopy(file.name, file.bytes)
+      setBusy('Saving…')
+      const version = doc.version
+      if (await saveCopy(file.name, await doc.save())) setSavedVersion(version)
+    } catch (err) {
+      setError(describeError(err))
+    } finally {
+      setBusy(null)
+    }
   }
 
   const print = async () => {
@@ -176,6 +234,13 @@ export default function App() {
       } else if (mod && e.key === 'p' && doc) {
         e.preventDefault()
         void print()
+      } else if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && doc) {
+        if ((e.target as HTMLElement).tagName === 'INPUT') return
+        e.preventDefault()
+        void undo()
+      } else if (mod && e.key === 's' && doc) {
+        e.preventDefault()
+        void download()
       } else if (mod && e.key === 'o') {
         e.preventDefault()
         fileInput.current?.click()
@@ -229,7 +294,7 @@ export default function App() {
             e.target.value = ''
           }}
         />
-        <button onClick={download} disabled={!file}>
+        <button onClick={() => void download()} disabled={!file || !!busy}>
           Save a copy
         </button>
         <button onClick={() => void print()} disabled={!doc || !!busy}>
@@ -237,8 +302,22 @@ export default function App() {
         </button>
         <span className="filename" title={file?.name}>
           {file?.name}
+          {dirty && <span className="dirty"> · edited</span>}
         </span>
         {doc && (
+          <span className="modes" role="tablist">
+            <button role="tab" aria-selected={mode === 'view'} onClick={() => setMode('view')}>
+              Read
+            </button>
+            <button role="tab" aria-selected={mode === 'organize'} onClick={() => setMode('organize')}>
+              Organize pages
+            </button>
+            <button onClick={() => void undo()} disabled={!doc.undoDepth || !!busy} title="Undo (Ctrl+Z)">
+              Undo
+            </button>
+          </span>
+        )}
+        {doc && mode === 'view' && (
           <>
             <span className="pager">
               Page{' '}
@@ -338,7 +417,21 @@ export default function App() {
         </div>
       )}
 
-      <div className="body">
+      {doc && mode === 'organize' && (
+        <Organize
+          doc={doc}
+          onEdit={applyEdit}
+          onSaveFile={saveFile}
+          baseName={(file?.name ?? 'document').replace(/\.pdf$/i, '')}
+          onError={handleEngineError}
+          onOpenPage={(i) => {
+            setMode('view')
+            requestAnimationFrame(() => scrollToPage(i))
+          }}
+        />
+      )}
+
+      <div className="body" hidden={mode === 'organize' && !!doc}>
         {doc && (
           <aside className="sidebar">
             <div className="tabs" role="tablist">

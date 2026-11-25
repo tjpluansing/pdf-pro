@@ -75,6 +75,24 @@ function heap(m: WrappedPdfiumModule): Uint8Array {
   return (m.pdfium as unknown as { HEAPU8: Uint8Array }).HEAPU8
 }
 
+/** Serializes an open PDFium document to bytes through the embedpdf file-writer helpers. */
+function saveHandle(m: WrappedPdfiumModule, doc: number): Uint8Array {
+  const writer = m.PDFiumExt_OpenFileWriter()
+  try {
+    if (!m.PDFiumExt_SaveAsCopy(doc, writer)) throw new PdfError('unknown', 'PDFium could not save the document')
+    const size = m.PDFiumExt_GetFileWriterSize(writer)
+    const ptr = m.pdfium.wasmExports.malloc(size)
+    try {
+      m.PDFiumExt_GetFileWriterData(writer, ptr, size)
+      return heap(m).slice(ptr, ptr + size)
+    } finally {
+      m.pdfium.wasmExports.free(ptr)
+    }
+  } finally {
+    m.PDFiumExt_CloseFileWriter(writer)
+  }
+}
+
 interface EngineState {
   /** Set after a WebAssembly trap. PDFium's memory may be corrupt, so nothing else may run. */
   crashed: boolean
@@ -143,9 +161,8 @@ export class PdfEngine {
 }
 
 export class PdfDocument {
-  readonly pageCount: number
   private closed = false
-  private readonly sizes: PageSize[] = []
+  private sizes: PageSize[] = []
 
   private readonly m: WrappedPdfiumModule
   private readonly state: EngineState
@@ -157,7 +174,11 @@ export class PdfDocument {
     this.state = state
     this.handle = handle
     this.dataPtr = dataPtr
-    this.pageCount = m.FPDF_GetPageCount(handle)
+  }
+
+  /** Live page count; changes as pages are inserted or deleted. */
+  get pageCount(): number {
+    return this.m.FPDF_GetPageCount(this.handle)
   }
 
   pageSize(pageIndex: number): PageSize {
@@ -293,6 +314,96 @@ export class PdfDocument {
       return items
     }
     return walk(0, 0)
+  }
+
+  // ---- Page organizing ------------------------------------------------------
+
+  /** Page rotation in degrees clockwise: 0, 90, 180 or 270. */
+  pageRotation(pageIndex: number): number {
+    return this.withPage(pageIndex, (page) => this.m.FPDFPage_GetRotation(page) * 90)
+  }
+
+  /** Rotates pages by a multiple of 90 degrees (positive = clockwise). */
+  rotatePages(pageIndexes: number[], degrees: number): void {
+    const quarter = (((Math.round(degrees / 90) % 4) + 4) % 4)
+    for (const i of pageIndexes) {
+      this.withPage(i, (page) => this.m.FPDFPage_SetRotation(page, (this.m.FPDFPage_GetRotation(page) + quarter) % 4))
+    }
+    this.sizes = []
+  }
+
+  /** Deletes pages. A document must keep at least one page. */
+  deletePages(pageIndexes: number[]): void {
+    const unique = [...new Set(pageIndexes)].sort((a, b) => b - a)
+    unique.forEach((i) => this.checkPage(i))
+    if (unique.length >= this.pageCount) throw new PdfError('page', 'A PDF needs at least one page')
+    guard(this.state, () => unique.forEach((i) => this.m.FPDFPage_Delete(this.handle, i)))
+    this.sizes = []
+  }
+
+  /**
+   * Moves pages, keeping their relative order, so that the first of them ends
+   * up at `destIndex` in the resulting document.
+   */
+  movePages(pageIndexes: number[], destIndex: number): void {
+    const unique = [...new Set(pageIndexes)].sort((a, b) => a - b)
+    unique.forEach((i) => this.checkPage(i))
+    if (destIndex < 0 || destIndex > this.pageCount - unique.length) {
+      throw new PdfError('page', `Cannot move ${unique.length} page(s) to position ${destIndex}`)
+    }
+    const ok = this.withInts(unique, (ptr) => this.m.FPDF_MovePages(this.handle, ptr, unique.length, destIndex))
+    if (!ok) throw new PdfError('unknown', 'PDFium could not move the pages')
+    this.sizes = []
+  }
+
+  /**
+   * Copies pages from another open document into this one, inserted before
+   * `insertAt` (default: at the end). All pages are copied when none are listed.
+   */
+  insertPagesFrom(source: PdfDocument, pageIndexes?: number[], insertAt = this.pageCount): void {
+    const indexes = pageIndexes ?? Array.from({ length: source.pageCount }, (_, i) => i)
+    indexes.forEach((i) => source.checkPage(i))
+    if (insertAt < 0 || insertAt > this.pageCount) throw new PdfError('page', `Cannot insert at position ${insertAt}`)
+    const ok = this.withInts(indexes, (ptr) =>
+      this.m.FPDF_ImportPagesByIndex(this.handle, source.handle, ptr, indexes.length, insertAt),
+    )
+    if (!ok) throw new PdfError('unknown', 'PDFium could not copy the pages')
+    this.sizes = []
+  }
+
+  /** A new PDF containing only the listed pages, in the order given. */
+  extractPages(pageIndexes: number[]): Uint8Array {
+    pageIndexes.forEach((i) => this.checkPage(i))
+    if (pageIndexes.length === 0) throw new PdfError('page', 'Choose at least one page')
+    return guard(this.state, () => {
+      const out = this.m.FPDF_CreateNewDocument()
+      if (!out) throw new PdfError('unknown', 'PDFium could not create a document')
+      try {
+        const ok = this.withInts(pageIndexes, (ptr) =>
+          this.m.FPDF_ImportPagesByIndex(out, this.handle, ptr, pageIndexes.length, 0),
+        )
+        if (!ok) throw new PdfError('unknown', 'PDFium could not copy the pages')
+        return saveHandle(this.m, out)
+      } finally {
+        this.m.FPDF_CloseDocument(out)
+      }
+    })
+  }
+
+  /** The document as it is now, including every edit, as PDF bytes. */
+  save(): Uint8Array {
+    if (this.closed) throw new PdfError('unknown', 'Document is closed')
+    return guard(this.state, () => saveHandle(this.m, this.handle))
+  }
+
+  private withInts<T>(values: number[], fn: (ptr: number) => T): T {
+    const ptr = this.m.pdfium.wasmExports.malloc(Math.max(4, values.length * 4))
+    try {
+      values.forEach((v, i) => this.m.pdfium.setValue(ptr + i * 4, v, 'i32'))
+      return guard(this.state, () => fn(ptr))
+    } finally {
+      this.m.pdfium.wasmExports.free(ptr)
+    }
   }
 
   close(): void {

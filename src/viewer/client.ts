@@ -1,6 +1,6 @@
 // Main-thread handle on the PDF engine worker.
 import { PdfError, type OutlineItem, type PageSize, type PdfErrorCode, type SearchHit } from '../engine/pdfium'
-import type { OpenResult, RenderResult, Request, Response } from './protocol'
+import type { BytesResult, DocInfo, Edit, OpenResult, RenderResult, Request, Response } from './protocol'
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void }
 
@@ -49,24 +49,61 @@ export class EngineClient {
   }
 
   /** @internal */
-  request<T>(req: Omit<Request, 'id'> & Record<string, unknown>, signal?: AbortSignal): Promise<T> {
-    return this.call<T>(req, [], signal)
+  request<T>(req: Omit<Request, 'id'> & Record<string, unknown>, signal?: AbortSignal, transfer: Transferable[] = []): Promise<T> {
+    return this.call<T>(req, transfer, signal)
   }
 }
 
+/**
+ * An open document. Edits return a new handle for the same document, so React
+ * state that holds the handle re-renders every page after a change.
+ */
 export class DocHandle {
   readonly id: number
   readonly pageCount: number
   readonly sizes: PageSize[]
   readonly outline: OutlineItem[]
+  /** Edits that can be undone. */
+  readonly undoDepth: number
+  /** Bumped on every edit, so cached page images can tell they are stale. */
+  readonly version: number
   private readonly client: EngineClient
 
-  constructor(client: EngineClient, r: OpenResult) {
+  constructor(client: EngineClient, r: OpenResult, version = 0) {
     this.client = client
     this.id = r.docId
     this.pageCount = r.pageCount
     this.sizes = r.sizes
     this.outline = r.outline
+    this.undoDepth = r.undoDepth
+    this.version = version
+  }
+
+  private next(r: DocInfo): DocHandle {
+    return new DocHandle(this.client, { ...r, docId: this.id }, this.version + 1)
+  }
+
+  async edit(edit: Edit): Promise<DocHandle> {
+    const transfer: Transferable[] = []
+    if (edit.kind === 'insert') {
+      edit = { ...edit, bytes: edit.bytes.slice() }
+      transfer.push(edit.bytes.buffer)
+    }
+    return this.next(await this.client.request<DocInfo>({ type: 'edit', docId: this.id, edit }, undefined, transfer))
+  }
+
+  async undo(): Promise<DocHandle> {
+    return this.next(await this.client.request<DocInfo>({ type: 'undo', docId: this.id }))
+  }
+
+  /** The whole document as it is now, edits included. */
+  async save(): Promise<Uint8Array> {
+    return (await this.client.request<BytesResult>({ type: 'save', docId: this.id })).bytes
+  }
+
+  /** A new PDF holding copies of the given pages. */
+  async extract(pages: number[]): Promise<Uint8Array> {
+    return (await this.client.request<BytesResult>({ type: 'extract', docId: this.id, pages })).bytes
   }
 
   async render(pageIndex: number, scale: number, signal?: AbortSignal): Promise<ImageData> {
