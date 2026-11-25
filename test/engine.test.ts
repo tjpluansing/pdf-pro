@@ -85,6 +85,33 @@ describe('PdfEngine', () => {
     }
   })
 
+  describe('password-protected files (AES-256, user password "secret")', () => {
+    const encrypted = () => new Uint8Array(readFileSync(new URL('./fixtures/encrypted-aes256.pdf', import.meta.url)))
+
+    it('asks for a password when none is given', () => {
+      expect(() => engine.open(encrypted())).toThrowError(expect.objectContaining({ code: 'password' }))
+    })
+
+    it('rejects a wrong password with the same code', () => {
+      expect(() => engine.open(encrypted(), 'wrong')).toThrowError(expect.objectContaining({ code: 'password' }))
+    })
+
+    it('opens and reads text with the right password', () => {
+      const doc = engine.open(encrypted(), 'secret')
+      expect(doc.pageText(0)).toContain('Top secret text')
+      doc.close()
+    })
+  })
+
+  it('returns every page size at once', async () => {
+    const doc = engine.open(await sample())
+    expect(doc.pageSizes()).toEqual([
+      { width: 300, height: 400 },
+      { width: 612, height: 792 },
+    ])
+    doc.close()
+  })
+
   it('rejects out-of-range pages', async () => {
     const doc = engine.open(await sample())
     expect(() => doc.renderPage(2, 1)).toThrowError(/out of range/)
