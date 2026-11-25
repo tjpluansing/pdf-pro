@@ -1,0 +1,3 @@
+{
+  "jpx_numcomps.pdf": "PDFium traps (WebAssembly 'unreachable') decoding a malformed JPEG 2000 image. The app recovers by recreating the engine; fix or report upstream before phase 2."
+}

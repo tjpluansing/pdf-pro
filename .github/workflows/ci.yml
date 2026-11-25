@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [Primary]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Cache sample PDFs
+        uses: actions/cache@v4
+        with:
+          path: corpus
+          key: corpus-${{ hashFiles('scripts/corpus-manifest.json') }}
+      - run: npm run corpus:fetch
+      - name: Phase 1 gate (every sample PDF opens without crashing)
+        run: npm run corpus:check

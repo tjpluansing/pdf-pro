@@ -1,0 +1,258 @@
+:root {
+  --bg: #f3f3f1;
+  --panel: #ffffff;
+  --canvas: #e4e4e0;
+  --ink: #1d1d1b;
+  --muted: #6b6b66;
+  --line: #d6d6d0;
+  --accent: #c8321f;
+  --hl: rgba(255, 196, 0, 0.38);
+  --hl-active: rgba(255, 120, 0, 0.55);
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1b;
+    --panel: #262625;
+    --canvas: #121211;
+    --ink: #ececea;
+    --muted: #a0a09a;
+    --line: #3a3a38;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button.on,
+button[aria-selected='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+input {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.brand {
+  color: var(--accent);
+  margin-right: 4px;
+}
+.filename {
+  color: var(--muted);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pager input {
+  width: 52px;
+  text-align: center;
+}
+.zoom,
+.search,
+.pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.zoom-value {
+  min-width: 48px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.search {
+  margin-left: auto;
+}
+.search input {
+  width: 200px;
+}
+.count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.error {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #fdecea;
+  color: #7a1c10;
+  border-bottom: 1px solid #f3c2bb;
+}
+.error button {
+  background: transparent;
+  border: none;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.sidebar {
+  width: 168px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+}
+.tabs button {
+  flex: 1;
+  padding: 4px;
+  font-size: 12px;
+}
+.thumbs {
+  overflow-y: auto;
+  padding: 8px 0 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.thumb {
+  border: 2px solid transparent;
+  background: none;
+  padding: 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.thumb.on {
+  border-color: var(--accent);
+}
+.thumb-page {
+  position: relative;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.outline {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 16px 8px;
+  overflow-y: auto;
+}
+.outline .outline {
+  padding: 0 0 0 12px;
+}
+.outline button {
+  border: none;
+  background: none;
+  text-align: left;
+  width: 100%;
+  padding: 4px;
+  font-size: 13px;
+}
+
+.pages {
+  flex: 1;
+  overflow: auto;
+  background: var(--canvas);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+}
+.page {
+  position: relative;
+  flex-shrink: 0;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+.page canvas,
+.thumb-page canvas {
+  display: block;
+}
+.hl {
+  position: absolute;
+  background: var(--hl);
+  mix-blend-mode: multiply;
+  pointer-events: none;
+}
+.hl-active {
+  background: var(--hl-active);
+}
+
+.empty {
+  margin: auto;
+  text-align: center;
+  padding: 48px 64px;
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+}
+.empty.drag {
+  border-color: var(--accent);
+}
+.hint {
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .sidebar {
+    display: none;
+  }
+  .search {
+    margin-left: 0;
+  }
+}
