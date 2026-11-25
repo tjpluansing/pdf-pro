@@ -5,6 +5,7 @@
 import wasmUrl from '@embedpdf/pdfium/pdfium.wasm?url'
 import { PdfEngine, PdfError, type CompressResult, type PdfDocument, type ReplaceResult } from '../engine/pdfium'
 import { dropUnreachable } from '../engine/sweep'
+import { compareWords, wordsOf } from '../engine/compare'
 import type { DocInfo, Edit, Request, Response } from './protocol'
 
 declare const self: DedicatedWorkerGlobalScope
@@ -166,6 +167,12 @@ async function handle(req: Request) {
       const pages: number[] = []
       for (let i = 0; i < d.pageCount; i++) if (d.needsOcr(i)) pages.push(i)
       return reply({ id: req.id, ok: true, value: pages })
+    }
+    case 'compare': {
+      const layouts = (d: PdfDocument) => Array.from({ length: d.pageCount }, (_, i) => d.textLayout(i))
+      const before = wordsOf(layouts(doc(req.otherDocId)))
+      const after = wordsOf(layouts(doc(req.docId)))
+      return reply({ id: req.id, ok: true, value: compareWords(before, after) })
     }
     case 'textLines':
       return reply({ id: req.id, ok: true, value: doc(req.docId).textLines(req.pageIndex) })

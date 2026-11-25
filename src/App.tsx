@@ -20,6 +20,7 @@ import { printDocument } from './viewer/print'
 import { RedactLayer, type RedactMark } from './viewer/RedactLayer'
 import { RedactDialog } from './viewer/RedactDialog'
 import { EditTextLayer } from './viewer/EditTextLayer'
+import { CompareView } from './viewer/CompareView'
 
 const TOOLS: { tool: Tool; label: string; key: string }[] = [
   { tool: 'select', label: 'Select', key: 'v' },
@@ -124,6 +125,8 @@ export default function App() {
   const [compressing, setCompressing] = useState(false)
   const [redactMarks, setRedactMarks] = useState<RedactMark[]>([])
   const [confirmRedact, setConfirmRedact] = useState(false)
+  /** The other version, while comparing the open file with it. */
+  const [comparing, setComparing] = useState<{ older: DocHandle; name: string } | null>(null)
   const [pageTextKinds, setPageTextKinds] = useState<PageTextKind[]>([])
   const [notice, setNotice] = useState<string | null>(null)
   const [tool, setTool] = useState<Tool>('select')
@@ -137,6 +140,7 @@ export default function App() {
   const scroller = useRef<HTMLDivElement>(null)
   const searchBox = useRef<HTMLInputElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  const compareInput = useRef<HTMLInputElement>(null)
 
   // Close the old document when another file replaces it or the app unmounts.
   // Edits hand back a new handle for the same document, which must stay open.
@@ -180,6 +184,10 @@ export default function App() {
         setTextSel(null)
         setQuery('')
         setRedactMarks([])
+        setComparing((c) => {
+          c?.older.close()
+          return null
+        })
         setCurrentPage(0)
         setFit('width')
         scroller.current?.scrollTo({ top: 0 })
@@ -293,7 +301,7 @@ export default function App() {
   )
 
   // The Tools bar offers to remove watermarks, headers and footers only when there are some.
-  const toolsMode = mode === 'tools' && !!doc
+  const toolsMode = mode === 'tools' && !!doc && !comparing
   const redactMode = mode === 'redact' && !!doc
   const editMode = mode === 'edit' && !!doc
   useEffect(() => {
@@ -372,6 +380,39 @@ export default function App() {
     } finally {
       setBusy(null)
     }
+  }
+
+  const compareWith = async (f: File) => {
+    setNotice(null)
+    let bytes = new Uint8Array(await f.arrayBuffer())
+    let name = f.name
+    try {
+      if (isOfficeFile(f.name)) {
+        if (!isDesktop) {
+          setNotice(`${f.name} is an Office file. Comparing with one needs the PDF Pro desktop app, which converts it first.`)
+          return
+        }
+        setBusy(`Converting ${f.name} to PDF…`)
+        bytes = await convertFile(f.name, bytes, 'pdf')
+        name = withExtension(f.name, 'pdf')
+      }
+      setBusy('Opening the other version…')
+      const older = await engine.open(bytes)
+      setComparing((c) => {
+        c?.older.close()
+        return { older, name }
+      })
+    } catch (err) {
+      if (err instanceof PdfError && err.code === 'password') setNotice(`${f.name} is password protected. Remove its password first, then compare.`)
+      else handleEngineError(err)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const closeCompare = () => {
+    comparing?.older.close()
+    setComparing(null)
   }
 
   const exportWord = async () => {
@@ -933,6 +974,20 @@ export default function App() {
           <button onClick={() => void exportWord()} disabled={!!busy} title={isDesktop ? undefined : 'Needs the PDF Pro desktop app'}>
             Export to Word
           </button>
+          <button onClick={() => compareInput.current?.click()} disabled={!!busy} title="Show what changed between this file and another version of it">
+            Compare with another version…
+          </button>
+          <input
+            ref={compareInput}
+            type="file"
+            hidden
+            accept={['.pdf', ...(isDesktop ? OFFICE_EXTENSIONS.map((x) => `.${x}`) : [])].join(',')}
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              e.target.value = ''
+              if (f) void compareWith(f)
+            }}
+          />
           {pageTextKinds.includes('watermark') && (
             <button onClick={() => void runTool('Removing…', { kind: 'page-text-remove', kinds: ['watermark'] }, 'Watermarks removed.')}>
               Remove watermarks
@@ -1034,7 +1089,17 @@ export default function App() {
         />
       )}
 
-      {doc && mode === 'organize' && (
+      {doc && comparing && (
+        <CompareView
+          doc={doc}
+          older={comparing.older}
+          names={{ older: comparing.name, newer: file?.name ?? 'Current file' }}
+          onClose={closeCompare}
+          onError={handleEngineError}
+        />
+      )}
+
+      {doc && !comparing && mode === 'organize' && (
         <Organize
           doc={doc}
           onEdit={applyEdit}
@@ -1048,7 +1113,7 @@ export default function App() {
         />
       )}
 
-      <div className="body" hidden={mode === 'organize' && !!doc}>
+      <div className="body" hidden={(mode === 'organize' || !!comparing) && !!doc}>
         {doc && (
           <aside className="sidebar">
             <div className="tabs" role="tablist">

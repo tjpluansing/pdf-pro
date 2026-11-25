@@ -1,6 +1,7 @@
 // Main-thread handle on the PDF engine worker.
 import { PdfError, type Annotation, type FormField, type OutlineItem, type PageSize, type PageTextKind, type PdfErrorCode, type SearchHit, type Security, type TextLayout, type TextLine } from '../engine/pdfium'
 import type { BytesResult, DocInfo, Edit, OpenResult, RenderResult, Request, Response, TextLayoutResult } from './protocol'
+import type { Comparison } from '../engine/compare'
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void }
 
@@ -124,6 +125,11 @@ export class DocHandle {
   /** Pages with no text layer, which probably need OCR. */
   ocrCandidates(): Promise<number[]> {
     return this.client.request<number[]>({ type: 'ocrCandidates', docId: this.id })
+  }
+
+  /** What changed in this document since `older`, word by word. */
+  compare(older: DocHandle): Promise<Comparison> {
+    return this.client.request<Comparison>({ type: 'compare', docId: this.id, otherDocId: older.id })
   }
 
   /** A page's text, grouped into editable lines. */
