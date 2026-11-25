@@ -98,6 +98,12 @@ function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit): CompressResult |
       return d.unprotect()
     case 'compress':
       return d.compress(edit.options)
+    case 'ocr': {
+      let added = 0
+      for (const p of edit.pages) added += d.addOcrText(p.pageIndex, p.words)
+      if (added === 0) throw new PdfError('unknown', 'No text was found on these pages')
+      return
+    }
   }
 }
 
@@ -141,6 +147,12 @@ async function handle(req: Request) {
     case 'save': {
       const bytes = doc(req.docId).save()
       return reply({ id: req.id, ok: true, value: { bytes } }, [bytes.buffer])
+    }
+    case 'ocrCandidates': {
+      const d = doc(req.docId)
+      const pages: number[] = []
+      for (let i = 0; i < d.pageCount; i++) if (d.needsOcr(i)) pages.push(i)
+      return reply({ id: req.id, ok: true, value: pages })
     }
     case 'pageTextKinds':
       return reply({ id: req.id, ok: true, value: doc(req.docId).pageTextKinds() })

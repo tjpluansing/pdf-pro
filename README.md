@@ -37,6 +37,7 @@ The sample set is a fixed selection from [pdf.js's test files](https://github.co
 | `src/engine/forms.ts` | Forms: read and fill text fields, checkboxes, radio buttons and dropdowns; place signature images as stamps |
 | `src/engine/stamp.ts` | Watermarks, headers, footers and page numbers (tagged as PDF artifacts so they can be removed); AES-256 passwords and permissions |
 | `src/engine/compress.ts` | Reduce file size: downsample and re-encode large photos as JPEG; scans, line art and transparent images are left alone |
+| `src/engine/ocr.ts`, `src/viewer/recognize.ts` | Recognise text on scans with Tesseract (runs on the device, model bundled) and add it as an invisible, searchable text layer |
 | `src/viewer/AnnotLayer.tsx`, `CommentsPanel.tsx`, `selection.ts` | Comment mode: the drawing and text-selection layer over each page, and the comments list |
 | `src/viewer/Organize.tsx` | Organize pages: select, rotate, delete, drag to reorder, insert or merge other PDFs, extract and split |
 | `src/viewer/` (other) | Page canvas, printing, and the desktop/browser differences (`platform.ts`) |
