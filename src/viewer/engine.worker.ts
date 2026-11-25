@@ -6,6 +6,7 @@ import wasmUrl from '@embedpdf/pdfium/pdfium.wasm?url'
 import { PdfEngine, PdfError, type CompressResult, type PdfDocument, type ReplaceResult } from '../engine/pdfium'
 import { dropUnreachable } from '../engine/sweep'
 import { compareWords, wordsOf } from '../engine/compare'
+import { signPdf, signerFromP12 } from '../engine/sign'
 import type { DocInfo, Edit, Request, Response } from './protocol'
 
 declare const self: DedicatedWorkerGlobalScope
@@ -16,6 +17,12 @@ interface OpenDoc {
   doc: PdfDocument
   /** Opens the current file; the permissions password when the user gave it. */
   password: string
+  /**
+   * The exact bytes of the current state, while it has not been edited since
+   * it was opened, signed or restored. Saving returns these unchanged, so a
+   * signed file stays byte-for-byte as signed.
+   */
+  file: Uint8Array | null
   /** Saved copies from before each edit, newest last, with the password each needs. */
   undo: { bytes: Uint8Array; password: string }[]
 }
@@ -57,11 +64,21 @@ function info(e: OpenDoc): DocInfo {
   } catch (err) {
     if (err instanceof PdfError && err.code === 'crash') throw err
   }
-  return { pageCount: e.doc.pageCount, sizes: e.doc.pageSizes(), outline, undoDepth: e.undo.length, hasForm: e.doc.hasForm, security: e.doc.security }
+  return {
+    pageCount: e.doc.pageCount,
+    sizes: e.doc.pageSizes(),
+    outline,
+    undoDepth: e.undo.length,
+    hasForm: e.doc.hasForm,
+    security: e.doc.security,
+    signatureCount: e.doc.signatureCount,
+  }
 }
 
 function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit): CompressResult | ReplaceResult | void {
   switch (edit.kind) {
+    case 'certify':
+      throw new PdfError('unknown', 'Signing is handled before edits')
     case 'rotate':
       return d.rotatePages(edit.pages, edit.degrees)
     case 'delete':
@@ -119,17 +136,28 @@ async function handle(req: Request) {
   const pdf = await getEngine()
   switch (req.type) {
     case 'open': {
-      const e: OpenDoc = { doc: pdf.open(req.bytes, req.password), password: req.password, undo: [] }
+      const file = req.bytes.slice()
+      const e: OpenDoc = { doc: pdf.open(req.bytes, req.password), password: req.password, undo: [], file }
       const docId = nextDocId++
       docs.set(docId, e)
       return reply({ id: req.id, ok: true, value: { docId, ...info(e) } })
     }
     case 'edit': {
       const e = entry(req.docId)
-      const before = { bytes: e.doc.save(), password: e.password }
+      const before = { bytes: e.file ?? e.doc.save(), password: e.password }
       let compressed: DocInfo['compressed']
       let replaced: DocInfo['replaced']
       try {
+        if (req.edit.kind === 'certify') {
+          const { p12, password, pageIndex, rect, reason, location } = req.edit
+          const signer = signerFromP12(p12, password)
+          const signed = await signPdf(before.bytes, signer, { pageIndex, rect: rect && e.doc.viewRectToPdf(pageIndex, rect), reason, location })
+          restore(pdf, e, { bytes: signed, password: e.password })
+          e.undo.push(before)
+          if (e.undo.length > UNDO_LIMIT) e.undo.shift()
+          return reply({ id: req.id, ok: true, value: info(e) })
+        }
+        e.file = null
         const result = applyEdit(pdf, e.doc, req.edit)
         if (req.edit.kind === 'text' && result) replaced = result as ReplaceResult
         if (req.edit.kind === 'compress' && result && 'images' in result) {
@@ -159,7 +187,8 @@ async function handle(req: Request) {
       return reply({ id: req.id, ok: true, value: info(e) })
     }
     case 'save': {
-      const bytes = doc(req.docId).save()
+      const e = entry(req.docId)
+      const bytes = e.file ? e.file.slice() : e.doc.save()
       return reply({ id: req.id, ok: true, value: { bytes } }, [bytes.buffer])
     }
     case 'ocrCandidates': {
@@ -173,6 +202,11 @@ async function handle(req: Request) {
       const before = wordsOf(layouts(doc(req.otherDocId)))
       const after = wordsOf(layouts(doc(req.docId)))
       return reply({ id: req.id, ok: true, value: compareWords(before, after) })
+    }
+    case 'signatures': {
+      const e = entry(req.docId)
+      const checks = e.file ? e.doc.signatures(e.file) : []
+      return reply({ id: req.id, ok: true, value: { checks, edited: !e.file && e.doc.signatureCount > 0 } })
     }
     case 'textLines':
       return reply({ id: req.id, ok: true, value: doc(req.docId).textLines(req.pageIndex) })
@@ -217,6 +251,7 @@ function restore(pdf: PdfEngine, e: OpenDoc, snapshot: { bytes: Uint8Array; pass
   e.doc.close()
   e.doc = next
   e.password = snapshot.password
+  e.file = snapshot.bytes
 }
 
 /** Saves and reopens the document, e.g. after its password changed. */

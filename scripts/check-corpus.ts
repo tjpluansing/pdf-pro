@@ -24,6 +24,7 @@ let engine = await PdfEngine.create(wasm)
 const counts = { opened: 0, rejected: 0, knownCrash: 0, crashed: 0 }
 const redaction = { tried: 0, failed: [] as string[] }
 const textEdits = { tried: 0, failed: [] as string[] }
+const signatures: Record<string, number> = {}
 const comparisons = { tried: 0, words: 0, ms: 0, failed: [] as string[] }
 const crashes: string[] = []
 const started = Date.now()
@@ -54,6 +55,8 @@ for (const name of files) {
           copy.close()
         }
       }
+      // Signed files: every signature must be checked without crashing.
+      if (doc.signatureCount) for (const c of doc.signatures(readFileSync(join(dir, name)))) signatures[c.status] = (signatures[c.status] ?? 0) + 1
       // Comment mode reads every annotation in the file, so real-world ones must not crash it.
       doc.allAnnotations()
       doc.allFormFields()
@@ -127,5 +130,6 @@ for (const line of redaction.failed) console.log(`  redaction failed: ${line}`)
 console.log(`Edit text: ${textEdits.tried - textEdits.failed.length} of ${textEdits.tried} files had a line retyped`)
 for (const line of textEdits.failed) console.log(`  text edit failed: ${line}`)
 console.log(`Compare: ${comparisons.tried - comparisons.failed.length} of ${comparisons.tried} files matched themselves (${comparisons.words.toLocaleString('en-US')} words in ${(comparisons.ms / 1000).toFixed(1)}s)`)
+console.log(`Signatures checked: ${Object.entries(signatures).map(([k, v]) => `${v} ${k}`).join(', ') || 'none in the corpus'}`)
 for (const line of comparisons.failed) console.log(`  compare failed: ${line}`)
 process.exitCode = counts.crashed || redaction.failed.length || textEdits.failed.length || comparisons.failed.length ? 1 : 0

@@ -53,6 +53,8 @@ export interface FormField {
   multiline: boolean
   password: boolean
   multiSelect: boolean
+  /** Signature fields that already hold a digital signature. */
+  signed?: boolean
   /** Combo boxes that also accept typed text. */
   editable: boolean
   maxLength?: number
@@ -140,6 +142,8 @@ export function readFields(m: WrappedPdfiumModule, env: FormEnv, page: number, p
             multiSelect: type === 'list' && !!(flags & MULTI_SELECT),
             editable: type === 'combo' && !!(flags & COMBO_EDIT),
           }
+          // A signed field's widget carries the signature as /V; it shows its own appearance.
+          if (type === 'signature') field.signed = !!m.FPDFAnnot_HasKey(annot, 'V')
           if (type === 'checkbox' || type === 'radio') {
             field.checked = !!m.FPDFAnnot_IsChecked(form, annot)
             field.exportValue = readString(m, (b, l) => m.FPDFAnnot_GetFormFieldExportValue(form, annot, b, l))

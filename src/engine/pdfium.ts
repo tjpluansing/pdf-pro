@@ -15,6 +15,7 @@ import {
   removeById,
   setCommonFields,
   updateById,
+  viewToBox,
   type Annotation,
   type AnnotationPatch,
   type NewAnnotation,
@@ -27,6 +28,7 @@ import { addOcrWords, type OcrWord } from './ocr'
 import { compressPage, type CompressOptions, type CompressResult } from './compress'
 import { redactPage, type RedactResult } from './redact'
 import { readLines, replaceLine, type ReplaceResult, type TextLine } from './textedit'
+import { checkSignature, type SignatureCheck } from './sign'
 import {
   addPageText,
   fillPlaceholders,
@@ -109,6 +111,58 @@ export interface OutlineItem {
   /** Target page, or null when the bookmark points somewhere PDFium cannot resolve to a page. */
   pageIndex: number | null
   children: OutlineItem[]
+}
+
+/** Where the page's signed signature fields sit, in view points. */
+function signedSignatureBoxes(m: WrappedPdfiumModule, page: number): Rect[] {
+  const out: Rect[] = []
+  const f = pageFrame(m, page)
+  const p = m.pdfium.wasmExports.malloc(16)
+  try {
+    for (let i = 0; i < m.FPDFPage_GetAnnotCount(page); i++) {
+      const annot = m.FPDFPage_GetAnnot(page, i)
+      if (!annot) continue
+      try {
+        if (m.FPDFAnnot_GetSubtype(annot) !== WIDGET_SUBTYPE || !m.FPDFAnnot_HasKey(annot, 'V')) continue
+        const ft = m.FPDFAnnot_HasKey(annot, 'FT') ? readAnnotName(m, annot, 'FT') : ''
+        if (ft !== 'Sig' || !m.FPDFAnnot_GetRect(annot, p)) continue
+        const [left, top, right, bottom] = [0, 4, 8, 12].map((o) => m.pdfium.getValue(p + o, 'float'))
+        const r = boxToView(f, left, top, right, bottom)
+        if (r.width > 0 && r.height > 0) out.push(r)
+      } finally {
+        m.FPDFPage_CloseAnnot(annot)
+      }
+    }
+  } finally {
+    m.pdfium.wasmExports.free(p)
+  }
+  return out
+}
+
+const WIDGET_SUBTYPE = 20
+
+/** A name-valued key of an annotation's dictionary, such as /FT. */
+function readAnnotName(m: WrappedPdfiumModule, annot: number, key: string): string {
+  // GetValueType 4 is a name; PDFium returns names through the string getter.
+  const len = m.FPDFAnnot_GetStringValue(annot, key, 0, 0)
+  if (len <= 2) return ''
+  const ptr = m.pdfium.wasmExports.malloc(len)
+  try {
+    m.FPDFAnnot_GetStringValue(annot, key, ptr, len)
+    return m.pdfium.UTF16ToString(ptr)
+  } finally {
+    m.pdfium.wasmExports.free(ptr)
+  }
+}
+
+/** "D:20261125120000+08'00'" as an ISO date, or undefined. */
+function pdfDateToIso(d: string): string | undefined {
+  const m = /^D:(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?(Z|[+-]\d{2}'?\d{2}'?)?/.exec(d)
+  if (!m) return undefined
+  const [, y, mo = '01', da = '01', h = '00', mi = '00', se = '00', tz] = m
+  const zone = !tz || tz === 'Z' ? 'Z' : `${tz.slice(0, 3)}:${tz.replace(/'/g, '').slice(3, 5) || '00'}`
+  const t = new Date(`${y}-${mo}-${da}T${h}:${mi}:${se}${zone}`)
+  return isNaN(t.getTime()) ? undefined : t.toISOString()
 }
 
 /** The wasm heap. Typed here because the package's typings omit Emscripten's HEAP views. */
@@ -254,6 +308,33 @@ export class PdfDocument {
         // Form fields are drawn separately, through the form-fill environment.
         if (forms && this.hasForm) {
           this.formEnv().withPage(page, (form) => m.FPDF_FFLDraw(form, bitmap, page, 0, 0, width, height, 0, RENDER_FLAGS))
+        } else if (this.hasForm) {
+          // Inputs drawn by the viewer cover the other fields, but nothing covers a signed signature: draw just those.
+          const boxes = signedSignatureBoxes(m, page).map((r) => ({
+            x0: Math.max(0, Math.floor(r.x * scale)),
+            y0: Math.max(0, Math.floor(r.y * scale)),
+            x1: Math.min(width, Math.ceil((r.x + r.width) * scale)),
+            y1: Math.min(height, Math.ceil((r.y + r.height) * scale)),
+          }))
+          if (boxes.length) {
+            const layer = m.FPDFBitmap_CreateEx(width, height, FPDFBITMAP_BGRA, 0, 0)
+            try {
+              m.FPDFBitmap_FillRect(layer, 0, 0, width, height, WHITE)
+              m.FPDF_RenderPageBitmap(layer, page, 0, 0, width, height, 0, RENDER_FLAGS)
+              this.formEnv().withPage(page, (form) => m.FPDF_FFLDraw(form, layer, page, 0, 0, width, height, 0, RENDER_FLAGS))
+              const stride = m.FPDFBitmap_GetStride(bitmap)
+              const src = m.FPDFBitmap_GetBuffer(layer)
+              const dst = m.FPDFBitmap_GetBuffer(bitmap)
+              for (const b of boxes) {
+                for (let y = b.y0; y < b.y1; y++) {
+                  const from = src + y * stride + b.x0 * 4
+                  heap(m).copyWithin(dst + y * stride + b.x0 * 4, from, from + (b.x1 - b.x0) * 4)
+                }
+              }
+            } finally {
+              m.FPDFBitmap_Destroy(layer)
+            }
+          }
         }
         const stride = m.FPDFBitmap_GetStride(bitmap)
         const buffer = m.FPDFBitmap_GetBuffer(bitmap)
@@ -543,6 +624,61 @@ export class PdfDocument {
       })
     }
     return pages
+  }
+
+  get signatureCount(): number {
+    return guard(this.state, () => Math.max(0, this.m.FPDF_GetSignatureCount(this.handle)))
+  }
+
+  /** A rectangle in view points as PDF user space (left, bottom, right, top), e.g. for a signature box. */
+  viewRectToPdf(pageIndex: number, rect: Rect): [number, number, number, number] {
+    return this.withPage(pageIndex, (page) => {
+      const b = viewToBox(pageFrame(this.m, page), rect)
+      return [b.left, b.bottom, b.right, b.top]
+    })
+  }
+
+  /**
+   * The document's digital signatures, each checked against `file`, which
+   * must be the bytes the document was opened from.
+   */
+  signatures(file: Uint8Array): SignatureCheck[] {
+    const m = this.m
+    return guard(this.state, () => {
+      const out: SignatureCheck[] = []
+      const count = m.FPDF_GetSignatureCount(this.handle)
+      for (let i = 0; i < count; i++) {
+        const sig = m.FPDF_GetSignatureObject(this.handle, i)
+        if (!sig) continue
+        const read = (fn: (sig: number, buf: number, len: number) => number) => {
+          const len = fn(sig, 0, 0)
+          if (len <= 0) return new Uint8Array()
+          const ptr = m.pdfium.wasmExports.malloc(len)
+          try {
+            fn(sig, ptr, len)
+            return heap(m).slice(ptr, ptr + len)
+          } finally {
+            m.pdfium.wasmExports.free(ptr)
+          }
+        }
+        const text = (b: Uint8Array) => String.fromCharCode(...b).replace(/\0+$/, '')
+        const rangeBytes = read((s, b, l) => m.FPDFSignatureObj_GetByteRange(s, b, l / 4) * 4)
+        const range = Array.from(new Int32Array(rangeBytes.buffer, rangeBytes.byteOffset, rangeBytes.length / 4))
+        const reasonBytes = read((s, b, l) => m.FPDFSignatureObj_GetReason(s, b, l))
+        const reason = reasonBytes.length > 2 ? new TextDecoder('utf-16le').decode(reasonBytes).replace(/\0+$/, '') : undefined
+        out.push(
+          checkSignature(
+            file,
+            range,
+            read((s, b, l) => m.FPDFSignatureObj_GetContents(s, b, l)),
+            text(read((s, b, l) => m.FPDFSignatureObj_GetSubFilter(s, b, l))),
+            reason,
+            pdfDateToIso(text(read((s, b, l) => m.FPDFSignatureObj_GetTime(s, b, l)))),
+          ),
+        )
+      }
+      return out
+    })
   }
 
   /** Which kinds of watermark, header or footer the document has. */

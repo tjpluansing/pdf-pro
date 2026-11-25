@@ -42,6 +42,7 @@ The sample set is a fixed selection from [pdf.js's test files](https://github.co
 | `src/engine/textedit.ts`, `src/viewer/EditTextLayer.tsx` | Edit text: groups text objects into lines and retypes a line in place, keeping its font, size, colour and position; switches to the closest standard font when an embedded subset lacks a letter |
 | `src/engine/compare.ts`, `src/viewer/CompareView.tsx` | Compare: diffs the words of two versions (Myers diff) and shows them side by side, with changed, added and removed text highlighted and listed |
 | `src/viewer/assistant.ts`, `src/viewer/AssistantPanel.tsx` | AI assistant: summaries and questions about the open file, answered by Claude with the user's own API key; the PDF is sent with citations on so answers link to their pages |
+| `src/engine/sign.ts`, `src/viewer/CertSignDialog.tsx`, `src/viewer/SignaturesBar.tsx` | Certificate signatures: signs with a .p12/.pfx digital ID as an incremental update (earlier signatures stay valid), and checks every signature in a file |
 | `src-tauri/src/convert.rs` | Desktop only: open Word, Excel and PowerPoint files as PDF, and export a PDF to Word, by running the bundled LibreOffice (MPL-2.0) as a separate program. CI downloads LibreOffice and packs it into each installer |
 | `src/viewer/AnnotLayer.tsx`, `CommentsPanel.tsx`, `selection.ts` | Comment mode: the drawing and text-selection layer over each page, and the comments list |
 | `src/viewer/Organize.tsx` | Organize pages: select, rotate, delete, drag to reorder, insert or merge other PDFs, extract and split |
