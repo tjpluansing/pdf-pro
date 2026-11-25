@@ -31,18 +31,19 @@ The sample set is a fixed selection from [pdf.js's test files](https://github.co
 
 | Path | What it is |
 | --- | --- |
-| `src/engine/pdfium.ts` | Typed wrapper over PDFium WebAssembly: open, page sizes, render, text, search, outline. Runs in the browser and in Node. |
-| `src/viewer/engine.worker.ts`, `client.ts` | PDFium runs in a Web Worker; the UI talks to it through a small message protocol, and off-screen page renders are cancelled |
+| `src/engine/pdfium.ts` | Typed wrapper over PDFium WebAssembly: open, page sizes, render, text, search, outline, page edits (rotate, delete, move, insert, extract) and save. Runs in the browser and in Node. |
+| `src/viewer/engine.worker.ts`, `client.ts` | PDFium runs in a Web Worker; the UI talks to it through a small message protocol, and off-screen page renders are cancelled. The worker keeps up to 20 undo steps per file as saved snapshots. |
+| `src/viewer/Organize.tsx` | Organize pages: select, rotate, delete, drag to reorder, insert or merge other PDFs, extract and split |
 | `src/viewer/` (other) | Page canvas, printing, and the desktop/browser differences (`platform.ts`) |
 | `src-tauri/` | Desktop shell (Tauri 2): window, native Save dialog |
 | `src/App.tsx` | The viewer UI |
 | `scripts/` | Sample PDF download and the crash check |
-| `test/` | Engine tests, using PDFs built with pdf-lib and an AES-256 fixture (password `secret`) |
+| `test/` | Engine and page-organizing tests, using PDFs built with pdf-lib and an AES-256 fixture (password `secret`) |
 
 ## Roadmap
 
-1. **Viewer** (now): render, zoom, search, thumbnails, bookmarks, desktop and web shell
-2. **Annotate and organize**: comments, form fill, merge, split, reorder, watermarks, passwords
+1. **Viewer** (done): render, zoom, search, thumbnails, bookmarks, desktop and web shell
+2. **Annotate and organize** (now; organize pages is in): comments, form fill, merge, split, reorder, watermarks, passwords
 3. **Convert and OCR**: Office, images and web pages to PDF, compression, OCR
 4. **Pro tier**: true redaction, text editing, compare, AI summary and Q&A
 
