@@ -38,6 +38,8 @@ for (const name of files) {
       doc.allAnnotations()
       doc.allFormFields()
       doc.pageTextKinds()
+      doc.compress({ maxDpi: 150, quality: 70 })
+      doc.save()
       void doc.security
       doc.outline()
       counts.opened++

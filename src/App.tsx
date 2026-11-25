@@ -9,9 +9,10 @@ import type { FieldValue, FormField } from './engine/pdfium'
 import { EngineClient, type DocHandle } from './viewer/client'
 import { Organize } from './viewer/Organize'
 import { PageCanvas } from './viewer/PageCanvas'
+import { CompressDialog } from './viewer/CompressDialog'
 import { ProtectDialog } from './viewer/ProtectDialog'
 import { StampDialog, type StampKind } from './viewer/StampDialog'
-import type { PageText, PageTextKind, PageTextOptions, Permissions } from './engine/pdfium'
+import type { CompressOptions, PageText, PageTextKind, PageTextOptions, Permissions } from './engine/pdfium'
 import type { Edit } from './viewer/protocol'
 import { saveCopy } from './viewer/platform'
 import { printDocument } from './viewer/print'
@@ -116,6 +117,7 @@ export default function App() {
   const [signing, setSigning] = useState<{ kind: SignatureKind; place?: { pageIndex: number; at?: Point; fit?: Rect } } | null>(null)
   const [stamp, setStamp] = useState<StampKind | null>(null)
   const [protecting, setProtecting] = useState(false)
+  const [compressing, setCompressing] = useState(false)
   const [pageTextKinds, setPageTextKinds] = useState<PageTextKind[]>([])
   const [notice, setNotice] = useState<string | null>(null)
   const [tool, setTool] = useState<Tool>('select')
@@ -302,6 +304,24 @@ export default function App() {
     setProtecting(false)
     const what = openPassword ? 'needs a password to open' : 'has restrictions'
     void runTool('Encrypting…', { kind: 'protect', openPassword, ownerPassword, permissions }, `The file now ${what}. Save a copy to keep it.`)
+  }
+
+  const compress = async (options: CompressOptions) => {
+    setCompressing(false)
+    setBusy('Compressing images…')
+    setNotice(null)
+    try {
+      const r = (await applyEdit({ kind: 'compress', options })).compressed
+      if (r) {
+        const mb = (n: number) => `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`
+        const pct = Math.round((1 - r.after / r.before) * 100)
+        setNotice(`${r.images} image${r.images === 1 ? '' : 's'} compressed: ${mb(r.before)} → ${mb(r.after)} (${pct}% smaller). Save a copy to keep it.`)
+      }
+    } catch (err) {
+      handleEngineError(err)
+    } finally {
+      setBusy(null)
+    }
   }
 
   const unlockOwner = async (password: string) => {
@@ -600,7 +620,7 @@ export default function App() {
               Fill &amp; Sign
             </button>
             <button role="tab" aria-selected={mode === 'tools'} onClick={() => setMode('tools')}>
-              Stamp &amp; Protect
+              Tools
             </button>
             <button role="tab" aria-selected={mode === 'organize'} onClick={() => setMode('organize')}>
               Organize pages
@@ -778,10 +798,11 @@ export default function App() {
       )}
 
       {toolsMode && doc && (
-        <div className="comment-bar" role="toolbar" aria-label="Stamp and protect tools">
+        <div className="comment-bar" role="toolbar" aria-label="Tools">
           <button onClick={() => setStamp('watermark')}>Watermark</button>
           <button onClick={() => setStamp('header-footer')}>Header &amp; footer</button>
           <button onClick={() => setStamp('page-numbers')}>Page numbers</button>
+          <button onClick={() => setCompressing(true)}>Reduce file size</button>
           {pageTextKinds.includes('watermark') && (
             <button onClick={() => void runTool('Removing…', { kind: 'page-text-remove', kinds: ['watermark'] }, 'Watermarks removed.')}>
               Remove watermarks
@@ -827,6 +848,7 @@ export default function App() {
       )}
 
       {stamp && doc && <StampDialog kind={stamp} pageCount={doc.pageCount} onApply={addPageText} onCancel={() => setStamp(null)} />}
+      {compressing && doc && <CompressDialog onApply={(o) => void compress(o)} onCancel={() => setCompressing(false)} />}
       {protecting && doc && <ProtectDialog permissions={doc.security.permissions} onApply={protect} onCancel={() => setProtecting(false)} />}
 
       {signing && (

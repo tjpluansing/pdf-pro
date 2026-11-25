@@ -67,6 +67,8 @@ export class DocHandle {
   readonly undoDepth: number
   readonly hasForm: boolean
   readonly security: Security
+  /** Set on the handle a compress edit returns. */
+  readonly compressed?: DocInfo['compressed']
   /** Bumped on every edit, so cached page images can tell they are stale. */
   readonly version: number
   private readonly client: EngineClient
@@ -80,6 +82,7 @@ export class DocHandle {
     this.undoDepth = r.undoDepth
     this.hasForm = r.hasForm
     this.security = r.security
+    this.compressed = r.compressed
     this.version = version
   }
 

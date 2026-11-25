@@ -3,7 +3,7 @@
 // files never blocks scrolling or typing. Requests are handled one at a time;
 // a pending request can be cancelled (e.g. a page scrolled out of view).
 import wasmUrl from '@embedpdf/pdfium/pdfium.wasm?url'
-import { PdfEngine, PdfError, type PdfDocument } from '../engine/pdfium'
+import { PdfEngine, PdfError, type CompressResult, type PdfDocument } from '../engine/pdfium'
 import type { DocInfo, Edit, Request, Response } from './protocol'
 
 declare const self: DedicatedWorkerGlobalScope
@@ -58,7 +58,7 @@ function info(e: OpenDoc): DocInfo {
   return { pageCount: e.doc.pageCount, sizes: e.doc.pageSizes(), outline, undoDepth: e.undo.length, hasForm: e.doc.hasForm, security: e.doc.security }
 }
 
-function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit) {
+function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit): CompressResult | void {
   switch (edit.kind) {
     case 'rotate':
       return d.rotatePages(edit.pages, edit.degrees)
@@ -96,6 +96,8 @@ function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit) {
       return d.protect(edit.openPassword, edit.ownerPassword, edit.permissions)
     case 'unprotect':
       return d.unprotect()
+    case 'compress':
+      return d.compress(edit.options)
   }
 }
 
@@ -111,8 +113,13 @@ async function handle(req: Request) {
     case 'edit': {
       const e = entry(req.docId)
       const before = { bytes: e.doc.save(), password: e.password }
+      let compressed: DocInfo['compressed']
       try {
-        applyEdit(pdf, e.doc, req.edit)
+        const result = applyEdit(pdf, e.doc, req.edit)
+        if (req.edit.kind === 'compress' && result) {
+          if (result.images === 0) throw new PdfError('unknown', 'The images in this file are already small, so there is nothing to compress')
+          compressed = { images: result.images, before: before.bytes.length, after: e.doc.save().length }
+        }
         // Encryption only happens on save: reopen so what the viewer shows is what will be saved.
         if (req.edit.kind === 'protect') reload(pdf, e, req.edit.ownerPassword || req.edit.openPassword)
         if (req.edit.kind === 'unprotect') reload(pdf, e, '')
@@ -123,7 +130,7 @@ async function handle(req: Request) {
       }
       e.undo.push(before)
       if (e.undo.length > UNDO_LIMIT) e.undo.shift()
-      return reply({ id: req.id, ok: true, value: info(e) })
+      return reply({ id: req.id, ok: true, value: { ...info(e), compressed } })
     }
     case 'undo': {
       const e = entry(req.docId)

@@ -7,6 +7,7 @@ import type {
   NewAnnotation,
   OutlineItem,
   PageSize,
+  CompressOptions,
   PageText,
   PageTextKind,
   PageTextOptions,
@@ -58,6 +59,7 @@ export type Edit =
   /** Applies on save; the document is saved and reopened at once so its state is current. */
   | { kind: 'protect'; openPassword: string; ownerPassword: string; permissions: Permissions }
   | { kind: 'unprotect' }
+  | { kind: 'compress'; options: CompressOptions }
 
 export interface DocInfo {
   pageCount: number
@@ -68,6 +70,8 @@ export interface DocInfo {
   /** The file has fillable form fields. */
   hasForm: boolean
   security: Security
+  /** After a compress edit: what changed. Sizes are of the saved file, in bytes. */
+  compressed?: { images: number; before: number; after: number }
 }
 
 export interface OpenResult extends DocInfo {
