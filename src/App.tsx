@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { PdfError, type Annotation, type NewAnnotation, type OutlineItem, type Point, type SearchHit, type TextLayout } from './engine/pdfium'
+import { PdfError, type Annotation, type NewAnnotation, type OutlineItem, type Point, type Rect, type SearchHit, type TextLayout } from './engine/pdfium'
 import { AnnotLayer, MARKUP_TOOLS, type MarkupTool, type TextSelection, type Tool } from './viewer/AnnotLayer'
 import { CommentsPanel } from './viewer/CommentsPanel'
+import { FormLayer } from './viewer/FormLayer'
+import { SignatureDialog } from './viewer/SignatureDialog'
+import { savedSignature, signaturePixels, type SignatureKind } from './viewer/signature'
+import type { FieldValue, FormField } from './engine/pdfium'
 import { EngineClient, type DocHandle } from './viewer/client'
 import { Organize } from './viewer/Organize'
 import { PageCanvas } from './viewer/PageCanvas'
@@ -22,6 +26,15 @@ const TOOLS: { tool: Tool; label: string; key: string }[] = [
   { tool: 'arrow', label: 'Arrow', key: 'a' },
   { tool: 'line', label: 'Line', key: 'l' },
 ]
+const SIGN_TOOLS: { tool: Tool; label: string }[] = [
+  { tool: 'select', label: 'Select' },
+  { tool: 'freetext', label: 'Text' },
+  { tool: 'check', label: '✓ Check' },
+  { tool: 'cross', label: '✗ Cross' },
+  { tool: 'date', label: 'Date' },
+  { tool: 'signature', label: 'Signature' },
+  { tool: 'initials', label: 'Initials' },
+]
 const SWATCHES = ['#ffd400', '#5fc35f', '#2a7ae2', '#d93025', '#1d1d1b']
 const DEFAULT_COLORS: Record<Tool, string> = {
   select: '#ffd400',
@@ -35,6 +48,11 @@ const DEFAULT_COLORS: Record<Tool, string> = {
   circle: '#d93025',
   arrow: '#d93025',
   line: '#d93025',
+  check: '#1d1d1b',
+  cross: '#1d1d1b',
+  date: '#1d1d1b',
+  signature: '#1d1d1b',
+  initials: '#1d1d1b',
 }
 const AUTHOR_KEY = 'pdfpro.author'
 
@@ -87,7 +105,12 @@ export default function App() {
   const [hits, setHits] = useState<SearchHit[]>([])
   const [activeHit, setActiveHit] = useState(0)
   const [dragging, setDragging] = useState(false)
-  const [mode, setMode] = useState<'view' | 'comment' | 'organize'>('view')
+  const [mode, setMode] = useState<'view' | 'comment' | 'sign' | 'organize'>('view')
+  const [signTool, setSignTool] = useState<Tool>('freetext')
+  const [signColor, setSignColor] = useState('#1d1d1b')
+  const [fields, setFields] = useState<FormField[] | null>(null)
+  /** Where to put a signature once the user has made one. */
+  const [signing, setSigning] = useState<{ kind: SignatureKind; place?: { pageIndex: number; at?: Point; fit?: Rect } } | null>(null)
   const [tool, setTool] = useState<Tool>('select')
   const [colors, setColors] = useState(DEFAULT_COLORS)
   const [annots, setAnnots] = useState<Annotation[] | null>(null)
@@ -137,6 +160,7 @@ export default function App() {
         setSavedVersion(next.version)
         setHits([])
         setAnnots(null)
+        setFields(null)
         setSelectedId(null)
         setTextSel(null)
         setQuery('')
@@ -237,16 +261,34 @@ export default function App() {
     [doc],
   )
 
-  // Comment mode lists every annotation; reload the list after each change to the document.
+  // Comment and Fill & Sign modes list every annotation; reload the list after each change.
   const commenting = mode === 'comment' && !!doc
+  const signMode = mode === 'sign' && !!doc
+  const editing = commenting || signMode
   useEffect(() => {
-    if (!commenting || !doc) return
+    if (!editing || !doc) return
     let live = true
     doc.annotations().then((list) => live && setAnnots(list), handleEngineError)
     return () => {
       live = false
     }
-  }, [commenting, doc, handleEngineError])
+  }, [editing, doc, handleEngineError])
+
+  // Fillable fields get HTML inputs in Read and Fill & Sign modes.
+  const formsShown = !!doc?.hasForm && (mode === 'view' || mode === 'sign')
+  useEffect(() => {
+    if (!formsShown || !doc) return
+    let live = true
+    doc.formFields().then((list) => live && setFields(list), handleEngineError)
+    return () => {
+      live = false
+    }
+  }, [formsShown, doc, handleEngineError])
+  const fieldsByPage = useMemo(() => {
+    const map = new Map<number, FormField[]>()
+    for (const f of fields ?? []) map.set(f.pageIndex, [...(map.get(f.pageIndex) ?? []), f])
+    return map
+  }, [fields])
 
   // Character boxes per page, kept until the document changes.
   const layouts = useMemo(() => {
@@ -292,6 +334,43 @@ export default function App() {
     if (a.id === selectedId) setSelectedId(null)
     void annotEdit({ kind: 'annot-remove', pageIndex: a.pageIndex, id: a.id })
   }
+  const setField = useCallback(
+    (f: FormField, value: FieldValue) => void annotEdit({ kind: 'field', pageIndex: f.pageIndex, index: f.index, value }),
+    [annotEdit],
+  )
+
+  /**
+   * Puts the saved signature (or initials) on the page: centred on `at`, or
+   * fitted inside `fit` for a signature field. Asks for one first if none is saved.
+   */
+  const placeSignature = async (kind: SignatureKind, pageIndex: number, at?: Point, fit?: Rect, url = savedSignature(kind)) => {
+    if (!url) {
+      setSigning({ kind, place: { pageIndex, at, fit } })
+      return
+    }
+    try {
+      const image = await signaturePixels(url)
+      const aspect = image.width / image.height
+      let rect: Rect
+      if (fit) {
+        const h = Math.min(fit.height, fit.width / aspect)
+        const w = h * aspect
+        rect = { x: fit.x + (fit.width - w) / 2, y: fit.y + (fit.height - h) / 2, width: w, height: h }
+      } else {
+        let h = kind === 'signature' ? 36 : 24
+        let w = h * aspect
+        if (w > 200) [w, h] = [200, 200 / aspect]
+        const p = at ?? { x: 50, y: 50 }
+        rect = { x: p.x - w / 2, y: p.y - h / 2, width: w, height: h }
+      }
+      const id = crypto.randomUUID()
+      setSelectedId(id)
+      await annotEdit({ kind: 'stamp', pageIndex, id, rect, image, author, label: kind === 'signature' ? 'Signature' : 'Initials' })
+    } catch (err) {
+      handleEngineError(err)
+    }
+  }
+
   const markSelection = (kind: MarkupTool) => {
     if (!textSel) return
     createAnnot({ kind, pageIndex: textSel.pageIndex, color: colors[kind], quads: textSel.rects })
@@ -378,8 +457,8 @@ export default function App() {
       } else if (mod && e.key === 'o') {
         e.preventDefault()
         fileInput.current?.click()
-      } else if (commenting && !mod && !e.altKey && !typingIn(e.target)) {
-        const t = TOOLS.find((x) => x.key === e.key.toLowerCase())
+      } else if (editing && !mod && !e.altKey && !typingIn(e.target)) {
+        const t = commenting ? TOOLS.find((x) => x.key === e.key.toLowerCase()) : undefined
         const sel = annots?.find((a) => a.id === selectedId)
         if (t) setTool(t.tool)
         else if ((e.key === 'Delete' || e.key === 'Backspace') && sel) {
@@ -462,6 +541,9 @@ export default function App() {
             </button>
             <button role="tab" aria-selected={mode === 'comment'} onClick={() => setMode('comment')}>
               Comment
+            </button>
+            <button role="tab" aria-selected={mode === 'sign'} onClick={() => setMode('sign')}>
+              Fill &amp; Sign
             </button>
             <button role="tab" aria-selected={mode === 'organize'} onClick={() => setMode('organize')}>
               Organize pages
@@ -611,6 +693,46 @@ export default function App() {
         </div>
       )}
 
+      {signMode && (
+        <div className="comment-bar" role="toolbar" aria-label="Fill and sign tools">
+          {SIGN_TOOLS.map((t) => (
+            <button key={t.tool} className={signTool === t.tool ? 'on' : ''} aria-pressed={signTool === t.tool} onClick={() => setSignTool(t.tool)}>
+              {t.label}
+            </button>
+          ))}
+          <span className="swatches" role="radiogroup" aria-label="Ink colour">
+            {['#1d1d1b', '#1f3a93', '#d93025'].map((c) => (
+              <button
+                key={c}
+                role="radio"
+                aria-checked={signColor === c}
+                aria-label={`Colour ${c}`}
+                className={signColor === c ? 'swatch-btn on' : 'swatch-btn'}
+                style={{ background: c }}
+                onClick={() => setSignColor(c)}
+              />
+            ))}
+          </span>
+          <span className="sel-actions">
+            {doc?.hasForm && <span className="count">{fields ? `${fields.filter((f) => f.type !== 'button').length} form fields` : ''}</span>}
+            <button onClick={() => setSigning({ kind: 'signature' })}>{savedSignature('signature') ? 'Change signature' : 'Create signature'}</button>
+          </span>
+        </div>
+      )}
+
+      {signing && (
+        <SignatureDialog
+          kind={signing.kind}
+          author={author}
+          onCancel={() => setSigning(null)}
+          onDone={(url) => {
+            const place = signing.place
+            setSigning(null)
+            if (place) void placeSignature(signing.kind, place.pageIndex, place.at, place.fit, url)
+          }}
+        />
+      )}
+
       {doc && mode === 'organize' && (
         <Organize
           doc={doc}
@@ -681,13 +803,14 @@ export default function App() {
                 highlights={hitsByPage.get(i)?.filter((h) => h !== current).flatMap((h) => h.rects)}
                 activeHighlight={current?.pageIndex === i ? current.rects : undefined}
                 onError={handleEngineError}
+                forms={!(formsShown && fields)}
               >
                 <AnnotLayer
                   pageIndex={i}
                   zoom={zoom}
-                  tool={commenting ? tool : 'select'}
-                  color={colors[tool]}
-                  annotations={commenting ? (annotsByPage.get(i) ?? []) : []}
+                  tool={commenting ? tool : signMode ? signTool : 'select'}
+                  color={signMode ? signColor : colors[tool]}
+                  annotations={editing ? (annotsByPage.get(i) ?? []) : []}
                   selectedId={selectedId}
                   loadLayout={loadLayout}
                   textSelection={textSel}
@@ -695,7 +818,16 @@ export default function App() {
                   onSelect={setSelectedId}
                   onCreate={createAnnot}
                   onMove={moveAnnot}
+                  onPlaceSignature={(pageIndex, at, kind) => void placeSignature(kind, pageIndex, at)}
                 />
+                {formsShown && fields && (
+                  <FormLayer
+                    fields={fieldsByPage.get(i) ?? []}
+                    zoom={zoom}
+                    onChange={setField}
+                    onSign={(f) => void placeSignature('signature', f.pageIndex, undefined, f.rect)}
+                  />
+                )}
               </PageCanvas>
             ))}
         </main>

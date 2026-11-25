@@ -33,6 +33,8 @@ export type AnnotKind =
   | 'circle'
   | 'line'
   | 'arrow'
+  /** An image, such as a signature placed with Fill & Sign. */
+  | 'stamp'
   /** Anything else PDF Pro shows in the list but cannot draw new copies of (stamps, attachments…). */
   | 'other'
 
@@ -60,7 +62,7 @@ export interface Annotation {
 }
 
 export interface NewAnnotation {
-  kind: Exclude<AnnotKind, 'other'>
+  kind: Exclude<AnnotKind, 'other' | 'stamp'>
   pageIndex: number
   color: string
   fill?: string | null
@@ -97,7 +99,7 @@ const SUBTYPES: Record<number, { name: string; kind: AnnotKind }> = {
   10: { name: 'Underline', kind: 'underline' },
   11: { name: 'Squiggly', kind: 'squiggly' },
   12: { name: 'StrikeOut', kind: 'strikeout' },
-  13: { name: 'Stamp', kind: 'other' },
+  13: { name: 'Stamp', kind: 'stamp' },
   14: { name: 'Caret', kind: 'other' },
   15: { name: 'Ink', kind: 'ink' },
   17: { name: 'FileAttachment', kind: 'other' },
@@ -589,6 +591,8 @@ export function updateById(m: WrappedPdfiumModule, page: number, id: string, pat
           const strokes = a.getInk(annot, f)
           m.FPDFAnnot_RemoveInkList(annot)
           for (const s of strokes) a.addInkStroke(annot, f, s.map(shift))
+        } else if (kind === 'stamp') {
+          // Nothing else to move: readers map the stamp's appearance box onto its /Rect.
         } else if (kind === 'line' || kind === 'arrow') {
           const line = a.getLine(annot, f)
           if (line) a.setLine(annot, f, [shift(line[0]), shift(line[1])])
@@ -599,7 +603,8 @@ export function updateById(m: WrappedPdfiumModule, page: number, id: string, pat
       }
     }
     a.setString(annot, 'M', pdfDate(now))
-    if (redraw) m.EPDFAnnot_GenerateAppearance(annot)
+    // Stamps keep the appearance built from their image; regenerating would blank it.
+    if (redraw && kind !== 'stamp') m.EPDFAnnot_GenerateAppearance(annot)
   } finally {
     m.FPDFPage_CloseAnnot(annot)
   }
@@ -635,4 +640,16 @@ export function readTextLayout(m: WrappedPdfiumModule, page: number, text: numbe
     m.pdfium.wasmExports.free(p)
   }
   return { text: chars.join(''), boxes }
+}
+
+/** Author, comment text, dates and the print flag, as every new annotation gets them. */
+export function setCommonFields(m: WrappedPdfiumModule, annot: number, author: string, contents: string, now = new Date()): boolean {
+  const a = new Annots(m)
+  return (
+    a.setString(annot, 'T', author) &&
+    a.setString(annot, 'Contents', contents) &&
+    a.setString(annot, 'M', pdfDate(now)) &&
+    a.setString(annot, 'CreationDate', pdfDate(now)) &&
+    !!m.FPDFAnnot_SetFlags(annot, FLAG_PRINT)
+  )
 }

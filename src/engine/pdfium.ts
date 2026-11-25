@@ -13,6 +13,7 @@ import {
   readAnnotations,
   readTextLayout,
   removeById,
+  setCommonFields,
   updateById,
   type Annotation,
   type AnnotationPatch,
@@ -21,6 +22,8 @@ import {
 } from './annotations'
 
 export type { Annotation, AnnotationPatch, AnnotKind, NewAnnotation, Point, TextLayout } from './annotations'
+import { FormEnv, addImageStamp, readFields, setField, type FieldValue, type FormField, type StampImage } from './forms'
+export type { FieldType, FieldValue, FormField, StampImage } from './forms'
 
 /** FPDF_ANNOT: draw annotations. FPDF_REVERSE_BYTE_ORDER: emit RGBA instead of BGRA. */
 const RENDER_FLAGS = 0x01 | 0x10
@@ -213,8 +216,8 @@ export class PdfDocument {
     return Array.from({ length: this.pageCount }, (_, i) => this.pageSize(i))
   }
 
-  /** Render a page at `scale` pixels per point (1 = 72 dpi). */
-  renderPage(pageIndex: number, scale: number): RenderedPage {
+  /** Render a page at `scale` pixels per point (1 = 72 dpi). `forms: false` leaves form fields out. */
+  renderPage(pageIndex: number, scale: number, { forms = true }: { forms?: boolean } = {}): RenderedPage {
     const { width: pw, height: ph } = this.pageSize(pageIndex)
     const width = Math.max(1, Math.round(pw * scale))
     const height = Math.max(1, Math.round(ph * scale))
@@ -225,6 +228,10 @@ export class PdfDocument {
       try {
         m.FPDFBitmap_FillRect(bitmap, 0, 0, width, height, WHITE)
         m.FPDF_RenderPageBitmap(bitmap, page, 0, 0, width, height, 0, RENDER_FLAGS)
+        // Form fields are drawn separately, through the form-fill environment.
+        if (forms && this.hasForm) {
+          this.formEnv().withPage(page, (form) => m.FPDF_FFLDraw(form, bitmap, page, 0, 0, width, height, 0, RENDER_FLAGS))
+        }
         const stride = m.FPDFBitmap_GetStride(bitmap)
         const buffer = m.FPDFBitmap_GetBuffer(bitmap)
         const data = new Uint8ClampedArray(width * height * 4)
@@ -450,15 +457,60 @@ export class PdfDocument {
     if (!ok) throw new PdfError('unknown', 'That comment is no longer on the page')
   }
 
+  // ---- Forms and signatures ---------------------------------------------------
+
+  /** Fillable fields on one page. */
+  formFields(pageIndex: number): FormField[] {
+    return this.withPage(pageIndex, (page) => readFields(this.m, this.formEnv(), page, pageIndex))
+  }
+
+  /** Fillable fields on every page, in page order. */
+  allFormFields(): FormField[] {
+    const out: FormField[] = []
+    for (let i = 0; i < this.pageCount; i++) out.push(...this.formFields(i))
+    return out
+  }
+
+  /** Changes a field through the widget at `index` on the page. */
+  setFormField(pageIndex: number, index: number, value: FieldValue): void {
+    this.withPage(pageIndex, (page) => setField(this.m, this.formEnv(), page, index, value))
+  }
+
+  /** Places an image (a signature, initials) as a stamp; returns its id. */
+  addImageStamp(
+    pageIndex: number,
+    rect: { x: number; y: number; width: number; height: number },
+    image: StampImage,
+    { author = '', label = '', id = crypto.randomUUID() }: { author?: string; label?: string; id?: string } = {},
+  ): string {
+    this.withPage(pageIndex, (page) =>
+      addImageStamp(this.m, this.handle, page, rect, image, id, (annot) => setCommonFields(this.m, annot, author, label)),
+    )
+    return id
+  }
+
   /** Characters and their boxes, for selecting text on a page. */
   textLayout(pageIndex: number): TextLayout {
     return this.withTextPage(pageIndex, (text, page) => readTextLayout(this.m, page, text))
+  }
+
+  private form: FormEnv | null = null
+
+  private formEnv(): FormEnv {
+    this.form ??= new FormEnv(this.m, this.handle)
+    return this.form
+  }
+
+  /** True when the file has fillable fields (AcroForm or XFA). */
+  get hasForm(): boolean {
+    return this.m.FPDF_GetFormType(this.handle) !== 0
   }
 
   close(): void {
     if (this.closed) return
     this.closed = true
     if (this.state.crashed) return // memory is not trustworthy; drop the engine instead
+    this.form?.close()
     this.m.FPDF_CloseDocument(this.handle)
     this.m.pdfium.wasmExports.free(this.dataPtr)
   }

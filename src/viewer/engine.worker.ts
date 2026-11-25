@@ -54,7 +54,7 @@ function info(e: OpenDoc): DocInfo {
   } catch (err) {
     if (err instanceof PdfError && err.code === 'crash') throw err
   }
-  return { pageCount: e.doc.pageCount, sizes: e.doc.pageSizes(), outline, undoDepth: e.undo.length }
+  return { pageCount: e.doc.pageCount, sizes: e.doc.pageSizes(), outline, undoDepth: e.undo.length, hasForm: e.doc.hasForm }
 }
 
 function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit) {
@@ -81,6 +81,11 @@ function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit) {
       return d.updateAnnotation(edit.pageIndex, edit.id, edit.patch)
     case 'annot-remove':
       return d.removeAnnotation(edit.pageIndex, edit.id)
+    case 'field':
+      return d.setFormField(edit.pageIndex, edit.index, edit.value)
+    case 'stamp':
+      d.addImageStamp(edit.pageIndex, edit.rect, edit.image, { id: edit.id, author: edit.author, label: edit.label })
+      return
   }
 }
 
@@ -117,6 +122,8 @@ async function handle(req: Request) {
       const bytes = doc(req.docId).save()
       return reply({ id: req.id, ok: true, value: { bytes } }, [bytes.buffer])
     }
+    case 'formFields':
+      return reply({ id: req.id, ok: true, value: doc(req.docId).allFormFields() })
     case 'annotations':
       return reply({ id: req.id, ok: true, value: doc(req.docId).allAnnotations() })
     case 'textLayout': {
@@ -128,7 +135,7 @@ async function handle(req: Request) {
       return reply({ id: req.id, ok: true, value: { bytes } }, [bytes.buffer])
     }
     case 'render': {
-      const page = doc(req.docId).renderPage(req.pageIndex, req.scale)
+      const page = doc(req.docId).renderPage(req.pageIndex, req.scale, { forms: req.forms ?? true })
       const pixels = page.data.buffer as ArrayBuffer
       return reply({ id: req.id, ok: true, value: { width: page.width, height: page.height, pixels } }, [pixels])
     }

@@ -573,3 +573,134 @@ button.icon {
     display: none;
   }
 }
+
+/* ---- Forms ---- */
+.form-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.field {
+  position: absolute;
+  pointer-events: auto;
+  margin: 0;
+  padding: 0 3px;
+  border: 1px solid rgba(40, 100, 200, 0.45);
+  border-radius: 2px;
+  background: rgba(205, 225, 255, 0.55);
+  color: #000;
+  font-family: Helvetica, Arial, sans-serif;
+  line-height: 1.2;
+}
+.field:focus {
+  outline: 2px solid #2a7ae2;
+  background: rgba(255, 255, 255, 0.95);
+}
+.field.required {
+  border-color: rgba(217, 48, 37, 0.7);
+}
+.field:disabled {
+  background: transparent;
+  border-color: transparent;
+}
+textarea.field {
+  resize: none;
+  padding-top: 2px;
+}
+input.field-checkbox,
+input.field-radio {
+  appearance: auto;
+  accent-color: #1d1d1b;
+  padding: 0;
+}
+.field-signature {
+  color: #1f3a93;
+  font-size: 12px;
+  border-style: dashed;
+}
+
+/* ---- Signature dialog ---- */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.dialog {
+  width: min(640px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 20px;
+  background: var(--panel);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+}
+.dialog h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.dialog .tabs {
+  padding: 0;
+}
+.sig-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.sig-pad {
+  width: 100%;
+  aspect-ratio: 10 / 3;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  touch-action: none;
+  cursor: crosshair;
+}
+.sig-line {
+  color: var(--muted);
+  font-size: 12px;
+}
+.sig-area input:not([type='file']) {
+  width: 100%;
+  font-size: 16px;
+}
+.sig-fonts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+.sig-fonts button {
+  font-size: 26px;
+  padding: 10px;
+  color: #14213d;
+  background: #fff;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sig-preview {
+  max-width: 100%;
+  max-height: 160px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
