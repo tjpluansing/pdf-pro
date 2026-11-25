@@ -1,11 +1,25 @@
 // Messages between the viewer (main thread) and the PDF engine worker.
-import type { Annotation, AnnotationPatch, NewAnnotation, OutlineItem, PageSize, PdfErrorCode, SearchHit, TextLayout } from '../engine/pdfium'
+import type {
+  Annotation,
+  AnnotationPatch,
+  FieldValue,
+  FormField,
+  NewAnnotation,
+  OutlineItem,
+  PageSize,
+  PdfErrorCode,
+  SearchHit,
+  StampImage,
+  TextLayout,
+} from '../engine/pdfium'
+import type { Rect } from '../engine/pdfium'
 
 export type { TextLayout }
 
 export type Request =
   | { id: number; type: 'open'; bytes: Uint8Array; password: string }
-  | { id: number; type: 'render'; docId: number; pageIndex: number; scale: number }
+  /** `forms: false` leaves form fields out, for when the viewer draws its own inputs over them. */
+  | { id: number; type: 'render'; docId: number; pageIndex: number; scale: number; forms?: boolean }
   | { id: number; type: 'search'; docId: number; query: string }
   | { id: number; type: 'close'; docId: number }
   | { id: number; type: 'cancel'; target: number }
@@ -16,6 +30,7 @@ export type Request =
   /** Comments and markup on every page. */
   | { id: number; type: 'annotations'; docId: number }
   | { id: number; type: 'textLayout'; docId: number; pageIndex: number }
+  | { id: number; type: 'formFields'; docId: number }
 
 /** A change to the open document. Page numbers are 0-based indexes. */
 export type Edit =
@@ -27,6 +42,8 @@ export type Edit =
   | { kind: 'annot-add'; id: string; annot: NewAnnotation }
   | { kind: 'annot-update'; pageIndex: number; id: string; patch: AnnotationPatch }
   | { kind: 'annot-remove'; pageIndex: number; id: string }
+  | { kind: 'field'; pageIndex: number; index: number; value: FieldValue }
+  | { kind: 'stamp'; pageIndex: number; id: string; rect: Rect; image: StampImage; author?: string; label?: string }
 
 export interface DocInfo {
   pageCount: number
@@ -34,6 +51,8 @@ export interface DocInfo {
   outline: OutlineItem[]
   /** Number of edits that can be undone. */
   undoDepth: number
+  /** The file has fillable form fields. */
+  hasForm: boolean
 }
 
 export interface OpenResult extends DocInfo {
@@ -58,5 +77,5 @@ export interface RenderResult {
 }
 
 export type Response =
-  | { id: number; ok: true; value: OpenResult | DocInfo | RenderResult | BytesResult | SearchHit[] | Annotation[] | TextLayoutResult | null }
+  | { id: number; ok: true; value: OpenResult | DocInfo | RenderResult | BytesResult | SearchHit[] | Annotation[] | FormField[] | TextLayoutResult | null }
   | { id: number; ok: false; error: { code: PdfErrorCode | 'cancelled'; message: string } }

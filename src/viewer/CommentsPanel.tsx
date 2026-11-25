@@ -13,6 +13,7 @@ const LABELS: Record<AnnotKind, string> = {
   circle: 'Ellipse',
   line: 'Line',
   arrow: 'Arrow',
+  stamp: 'Stamp',
   other: 'Annotation',
 }
 

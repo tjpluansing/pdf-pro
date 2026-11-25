@@ -14,6 +14,12 @@ export type Tool =
   | 'circle'
   | 'arrow'
   | 'line'
+  // Fill & Sign: one click places each of these.
+  | 'check'
+  | 'cross'
+  | 'date'
+  | 'signature'
+  | 'initials'
 
 export const MARKUP_TOOLS = ['highlight', 'underline', 'strikeout'] as const
 export type MarkupTool = (typeof MARKUP_TOOLS)[number]
@@ -38,6 +44,33 @@ interface Props {
   onSelect: (id: string | null) => void
   onCreate: (spec: NewAnnotation) => void
   onMove: (a: Annotation, to: Point) => void
+  /** Signature or initials tool clicked at a point. */
+  onPlaceSignature?: (pageIndex: number, at: Point, kind: 'signature' | 'initials') => void
+}
+
+const MARK = 10
+
+/** Strokes for a check mark or cross centred on `p`, `MARK` points across. */
+function markStrokes(kind: 'check' | 'cross', p: Point): Point[][] {
+  const h = MARK / 2
+  if (kind === 'check')
+    return [
+      [
+        { x: p.x - h, y: p.y },
+        { x: p.x - h * 0.3, y: p.y + h * 0.75 },
+        { x: p.x + h, y: p.y - h * 0.9 },
+      ],
+    ]
+  return [
+    [
+      { x: p.x - h, y: p.y - h },
+      { x: p.x + h, y: p.y + h },
+    ],
+    [
+      { x: p.x + h, y: p.y - h },
+      { x: p.x - h, y: p.y + h },
+    ],
+  ]
 }
 
 type Drag =
@@ -147,6 +180,26 @@ export function AnnotLayer(props: Props) {
       props.onSelect(hit?.id ?? null)
       return
     }
+    if (tool === 'check' || tool === 'cross') {
+      props.onCreate({ kind: 'ink', pageIndex, color, ink: markStrokes(tool, p), strokeWidth: 1.5 })
+      return
+    }
+    if (tool === 'date') {
+      const text = new Date().toLocaleDateString()
+      props.onCreate({
+        kind: 'freetext',
+        pageIndex,
+        color,
+        contents: text,
+        fontSize: 11,
+        rect: { x: p.x, y: p.y - 8, width: text.length * 6.5 + 8, height: 16 },
+      })
+      return
+    }
+    if (tool === 'signature' || tool === 'initials') {
+      props.onPlaceSignature?.(pageIndex, p, tool)
+      return
+    }
     if (tool === 'note') {
       props.onCreate({
         kind: 'note',
@@ -230,7 +283,7 @@ export function AnnotLayer(props: Props) {
     <div
       ref={el}
       className={`annot-layer tool-${tool}`}
-      style={{ cursor: textTool ? cursor : tool === 'note' ? 'copy' : 'crosshair' }}
+      style={{ cursor: textTool ? cursor : ['note', 'check', 'cross', 'date', 'signature', 'initials'].includes(tool) ? 'copy' : 'crosshair' }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

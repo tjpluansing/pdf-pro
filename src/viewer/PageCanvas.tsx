@@ -13,6 +13,8 @@ interface Props {
   activeHighlight?: Rect[]
   className?: string
   onError?: (err: unknown) => void
+  /** Draw form fields into the image. Off when HTML inputs cover them instead. */
+  forms?: boolean
   /** Drawn over the page, e.g. the comment tools. */
   children?: ReactNode
 }
@@ -22,7 +24,7 @@ interface Props {
  * A page that scrolls away before its turn is cancelled, so fast scrolling
  * through a long file only renders the pages you stop on.
  */
-export function PageCanvas({ doc, pageIndex, zoom, highlights, activeHighlight, className, onError, children }: Props) {
+export function PageCanvas({ doc, pageIndex, zoom, highlights, activeHighlight, className, onError, forms = true, children }: Props) {
   const box = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const [visible, setVisible] = useState(false)
@@ -43,7 +45,7 @@ export function PageCanvas({ doc, pageIndex, zoom, highlights, activeHighlight, 
     if (!visible) return
     const abort = new AbortController()
     const dpr = window.devicePixelRatio || 1
-    doc.render(pageIndex, zoom * dpr, abort.signal).then(
+    doc.render(pageIndex, zoom * dpr, abort.signal, forms).then(
       (img) => {
         const c = canvas.current
         if (abort.signal.aborted || !c) return
@@ -57,7 +59,7 @@ export function PageCanvas({ doc, pageIndex, zoom, highlights, activeHighlight, 
       },
     )
     return () => abort.abort()
-  }, [visible, doc, pageIndex, zoom, onError])
+  }, [visible, doc, pageIndex, zoom, onError, forms])
 
   const mark = (r: Rect, i: number, active: boolean) => (
     <div

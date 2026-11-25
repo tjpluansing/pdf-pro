@@ -34,6 +34,7 @@ The sample set is a fixed selection from [pdf.js's test files](https://github.co
 | `src/engine/pdfium.ts` | Typed wrapper over PDFium WebAssembly: open, page sizes, render, text, search, outline, page edits (rotate, delete, move, insert, extract) and save. Runs in the browser and in Node. |
 | `src/viewer/engine.worker.ts`, `client.ts` | PDFium runs in a Web Worker; the UI talks to it through a small message protocol, and off-screen page renders are cancelled. The worker keeps up to 20 undo steps per file as saved snapshots. |
 | `src/engine/annotations.ts` | Comments and markup: read, add, change and delete highlights, notes, text boxes, drawings and shapes; per-character text boxes for selecting text |
+| `src/engine/forms.ts` | Forms: read and fill text fields, checkboxes, radio buttons and dropdowns; place signature images as stamps |
 | `src/viewer/AnnotLayer.tsx`, `CommentsPanel.tsx`, `selection.ts` | Comment mode: the drawing and text-selection layer over each page, and the comments list |
 | `src/viewer/Organize.tsx` | Organize pages: select, rotate, delete, drag to reorder, insert or merge other PDFs, extract and split |
 | `src/viewer/` (other) | Page canvas, printing, and the desktop/browser differences (`platform.ts`) |
@@ -45,7 +46,7 @@ The sample set is a fixed selection from [pdf.js's test files](https://github.co
 ## Roadmap
 
 1. **Viewer** (done): render, zoom, search, thumbnails, bookmarks, desktop and web shell
-2. **Annotate and organize** (now; organize pages and comments are in): comments, form fill, merge, split, reorder, watermarks, passwords
+2. **Annotate and organize** (now; organize pages, comments and fill & sign are in): comments, form fill, merge, split, reorder, watermarks, passwords
 3. **Convert and OCR**: Office, images and web pages to PDF, compression, OCR
 4. **Pro tier**: true redaction, text editing, compare, AI summary and Q&A
 

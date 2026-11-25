@@ -36,6 +36,7 @@ for (const name of files) {
       }
       // Comment mode reads every annotation in the file, so real-world ones must not crash it.
       doc.allAnnotations()
+      doc.allFormFields()
       doc.outline()
       counts.opened++
     } finally {

@@ -1,5 +1,5 @@
 // Main-thread handle on the PDF engine worker.
-import { PdfError, type Annotation, type OutlineItem, type PageSize, type PdfErrorCode, type SearchHit, type TextLayout } from '../engine/pdfium'
+import { PdfError, type Annotation, type FormField, type OutlineItem, type PageSize, type PdfErrorCode, type SearchHit, type TextLayout } from '../engine/pdfium'
 import type { BytesResult, DocInfo, Edit, OpenResult, RenderResult, Request, Response, TextLayoutResult } from './protocol'
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void }
@@ -65,6 +65,7 @@ export class DocHandle {
   readonly outline: OutlineItem[]
   /** Edits that can be undone. */
   readonly undoDepth: number
+  readonly hasForm: boolean
   /** Bumped on every edit, so cached page images can tell they are stale. */
   readonly version: number
   private readonly client: EngineClient
@@ -76,6 +77,7 @@ export class DocHandle {
     this.sizes = r.sizes
     this.outline = r.outline
     this.undoDepth = r.undoDepth
+    this.hasForm = r.hasForm
     this.version = version
   }
 
@@ -89,6 +91,11 @@ export class DocHandle {
       edit = { ...edit, bytes: edit.bytes.slice() }
       transfer.push(edit.bytes.buffer)
     }
+    if (edit.kind === 'stamp') {
+      const rgba = edit.image.rgba.slice()
+      edit = { ...edit, image: { ...edit.image, rgba } }
+      transfer.push(rgba.buffer)
+    }
     return this.next(await this.client.request<DocInfo>({ type: 'edit', docId: this.id, edit }, undefined, transfer))
   }
 
@@ -99,6 +106,11 @@ export class DocHandle {
   /** The whole document as it is now, edits included. */
   async save(): Promise<Uint8Array> {
     return (await this.client.request<BytesResult>({ type: 'save', docId: this.id })).bytes
+  }
+
+  /** Fillable fields on every page, in page order. */
+  formFields(): Promise<FormField[]> {
+    return this.client.request<FormField[]>({ type: 'formFields', docId: this.id })
   }
 
   /** Comments and markup on every page, in page order. */
@@ -115,8 +127,8 @@ export class DocHandle {
     return (await this.client.request<BytesResult>({ type: 'extract', docId: this.id, pages })).bytes
   }
 
-  async render(pageIndex: number, scale: number, signal?: AbortSignal): Promise<ImageData> {
-    const r = await this.client.request<RenderResult>({ type: 'render', docId: this.id, pageIndex, scale }, signal)
+  async render(pageIndex: number, scale: number, signal?: AbortSignal, forms = true): Promise<ImageData> {
+    const r = await this.client.request<RenderResult>({ type: 'render', docId: this.id, pageIndex, scale, forms }, signal)
     return new ImageData(new Uint8ClampedArray(r.pixels), r.width, r.height)
   }
 
