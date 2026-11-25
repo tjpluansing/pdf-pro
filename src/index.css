@@ -781,3 +781,40 @@ button.primary {
 .stamp-dialog label.choice input {
   margin-top: 3px;
 }
+
+/* Redaction: marks wait as outlined boxes until they are applied. */
+.redact-layer {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+.redact-mark {
+  position: absolute;
+  border: 2px solid #c8321f;
+  background: rgb(200 50 31 / 0.18);
+  box-sizing: border-box;
+}
+.redact-mark.drafting {
+  border-style: dashed;
+}
+.redact-remove {
+  position: absolute;
+  top: -11px;
+  right: -11px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+  background: #c8321f;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+button.danger {
+  background: #c8321f;
+  border-color: #c8321f;
+}

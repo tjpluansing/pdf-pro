@@ -25,6 +25,7 @@ export type { Annotation, AnnotationPatch, AnnotKind, NewAnnotation, Point, Text
 import { FormEnv, addImageStamp, readFields, setField, type FieldValue, type FormField, type StampImage } from './forms'
 import { addOcrWords, type OcrWord } from './ocr'
 import { compressPage, type CompressOptions, type CompressResult } from './compress'
+import { redactPage, type RedactResult } from './redact'
 import {
   addPageText,
   fillPlaceholders,
@@ -42,6 +43,7 @@ export type { FieldType, FieldValue, FormField, StampImage } from './forms'
 export type { CompressOptions, CompressResult } from './compress'
 export type { OcrWord } from './ocr'
 export { COMPRESS_PRESETS } from './compress'
+export type { RedactResult } from './redact'
 export type { PageText, PageTextKind, PageTextOptions, Permissions, Security, StandardFont } from './stamp'
 
 /** FPDF_ANNOT: draw annotations. FPDF_REVERSE_BYTE_ORDER: emit RGBA instead of BGRA. */
@@ -554,6 +556,24 @@ export class PdfDocument {
     for (let i = 0; i < this.pageCount; i++) {
       this.withPage(i, (page) => {
         if (compressPage(this.m, this.handle, page, opts, result)) this.m.FPDFPage_GenerateContent(page)
+      })
+    }
+    return result
+  }
+
+  /**
+   * Permanently removes the text, image pixels, drawings, comments and form
+   * fields under the marked areas (view points), and blacks them out.
+   */
+  redact(marks: { pageIndex: number; rect: Rect }[]): RedactResult {
+    const result: RedactResult = { areas: 0, shapes: 0, annotations: 0 }
+    const byPage = new Map<number, Rect[]>()
+    for (const mk of marks) byPage.set(mk.pageIndex, [...(byPage.get(mk.pageIndex) ?? []), mk.rect])
+    for (const [pageIndex, rects] of byPage) {
+      this.withPage(pageIndex, (page) => {
+        if (this.hasForm) this.formEnv().withPage(page, (form) => redactPage(this.m, page, form, rects, result))
+        else redactPage(this.m, page, 0, rects, result)
+        if (!this.m.FPDFPage_GenerateContent(page)) throw new PdfError('unknown', 'PDFium could not update the page')
       })
     }
     return result

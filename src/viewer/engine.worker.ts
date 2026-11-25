@@ -4,6 +4,7 @@
 // a pending request can be cancelled (e.g. a page scrolled out of view).
 import wasmUrl from '@embedpdf/pdfium/pdfium.wasm?url'
 import { PdfEngine, PdfError, type CompressResult, type PdfDocument } from '../engine/pdfium'
+import { dropUnreachable } from '../engine/sweep'
 import type { DocInfo, Edit, Request, Response } from './protocol'
 
 declare const self: DedicatedWorkerGlobalScope
@@ -104,6 +105,10 @@ function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit): CompressResult |
       if (added === 0) throw new PdfError('unknown', 'No text was found on these pages')
       return
     }
+    case 'redact':
+      if (d.security.encrypted) throw new PdfError('unknown', 'Remove the password protection first, then redact')
+      if (d.redact(edit.marks).areas === 0) throw new PdfError('unknown', 'There was nothing to redact')
+      return
   }
 }
 
@@ -129,6 +134,10 @@ async function handle(req: Request) {
         // Encryption only happens on save: reopen so what the viewer shows is what will be saved.
         if (req.edit.kind === 'protect') reload(pdf, e, req.edit.ownerPassword || req.edit.openPassword)
         if (req.edit.kind === 'unprotect') reload(pdf, e, '')
+        // PDFium keeps removed content as unused objects; rewrite the file without them.
+        if (req.edit.kind === 'redact') {
+          restore(pdf, e, { bytes: (await dropUnreachable(e.doc.save())).bytes, password: e.password })
+        }
       } catch (err) {
         // A failed edit may have half-applied; put the document back as it was.
         if (!(err instanceof PdfError && err.code === 'crash')) restore(pdf, e, before)

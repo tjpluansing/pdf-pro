@@ -65,6 +65,8 @@ export type Edit =
   | { kind: 'compress'; options: CompressOptions }
   /** Recognised words to add as invisible text, per page. */
   | { kind: 'ocr'; pages: { pageIndex: number; words: OcrWord[] }[] }
+  /** Areas to redact, in view points. Permanent once the file is saved. */
+  | { kind: 'redact'; marks: { pageIndex: number; rect: Rect }[] }
 
 export interface DocInfo {
   pageCount: number
