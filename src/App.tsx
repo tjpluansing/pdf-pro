@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { PdfError, type OutlineItem, type PdfDocument, type PdfEngine, type SearchHit } from './engine/pdfium'
-import { createEngine } from './viewer/engine'
+import { PdfError, type OutlineItem, type SearchHit } from './engine/pdfium'
+import { EngineClient, type DocHandle } from './viewer/client'
 import { PageCanvas } from './viewer/PageCanvas'
+import { saveCopy } from './viewer/platform'
+import { printDocument } from './viewer/print'
 
 const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4]
 const THUMB_WIDTH = 120
@@ -12,8 +14,6 @@ type Fit = 'width' | 'page' | null
 function describeError(err: unknown): string {
   if (err instanceof PdfError) {
     switch (err.code) {
-      case 'password':
-        return 'This PDF is password-protected. Opening protected files is coming next.'
       case 'format':
       case 'file':
         return 'This file is damaged or is not a PDF.'
@@ -27,8 +27,10 @@ function describeError(err: unknown): string {
 }
 
 export default function App() {
-  const [engine, setEngine] = useState<PdfEngine | null>(null)
-  const [doc, setDoc] = useState<PdfDocument | null>(null)
+  const [engine] = useState(() => new EngineClient())
+  const [doc, setDoc] = useState<DocHandle | null>(null)
+  const [locked, setLocked] = useState<{ name: string; bytes: Uint8Array; wrong: boolean } | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
   const [file, setFile] = useState<{ name: string; bytes: Uint8Array } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [zoom, setZoom] = useState(1)
@@ -43,27 +45,22 @@ export default function App() {
   const searchBox = useRef<HTMLInputElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    createEngine().then(setEngine, (err) => setError(describeError(err)))
-  }, [])
-
   // Close the old document when it is replaced or the app unmounts.
   useEffect(() => () => doc?.close(), [doc])
 
   const handleEngineError = useCallback((err: unknown) => {
     setError(describeError(err))
-    if (err instanceof PdfError && err.code === 'crash') {
-      setDoc(null)
-      createEngine().then(setEngine, (e) => setError(describeError(e)))
-    }
+    // The worker restarts PDFium by itself after a crash; the open document is gone.
+    if (err instanceof PdfError && err.code === 'crash') setDoc(null)
   }, [])
 
   const openBytes = useCallback(
-    (name: string, bytes: Uint8Array) => {
-      if (!engine) return
+    async (name: string, bytes: Uint8Array, password = '') => {
+      setBusy('Opening…')
       try {
-        const next = engine.open(bytes)
+        const next = await engine.open(bytes, password)
         setError(null)
+        setLocked(null)
         setFile({ name, bytes })
         setDoc(next)
         setHits([])
@@ -72,7 +69,10 @@ export default function App() {
         setFit('width')
         scroller.current?.scrollTo({ top: 0 })
       } catch (err) {
-        handleEngineError(err)
+        if (err instanceof PdfError && err.code === 'password') setLocked({ name, bytes, wrong: password !== '' })
+        else handleEngineError(err)
+      } finally {
+        setBusy(null)
       }
     },
     [engine, handleEngineError],
@@ -83,21 +83,15 @@ export default function App() {
     [openBytes],
   )
 
-  const outline = useMemo<OutlineItem[]>(() => {
-    if (!doc) return []
-    try {
-      return doc.outline()
-    } catch {
-      return []
-    }
-  }, [doc])
+  const outline: OutlineItem[] = doc?.outline ?? []
 
   // Fit modes recompute the zoom from the widest page and the scroller size.
   useEffect(() => {
     const el = scroller.current
     if (!doc || !fit || !el) return
     const apply = () => {
-      const first = doc.pageSize(0)
+      const first = doc.sizes[0]
+      if (!first) return
       const availW = el.clientWidth - 2 * PAGE_GAP
       const availH = el.clientHeight - 2 * PAGE_GAP
       const z = fit === 'width' ? availW / first.width : Math.min(availW / first.width, availH / first.height)
@@ -135,15 +129,18 @@ export default function App() {
     }
   }
 
-  const runSearch = (q: string) => {
+  const runSearch = async (q: string) => {
     if (!doc) return
+    setBusy('Searching…')
     try {
-      const found = q.trim() ? doc.search(q.trim()) : []
+      const found = q.trim() ? await doc.search(q.trim()) : []
       setHits(found)
       setActiveHit(0)
       if (found[0]) scrollToPage(found[0].pageIndex)
     } catch (err) {
       handleEngineError(err)
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -155,11 +152,18 @@ export default function App() {
   }
 
   const download = () => {
-    if (!file) return
-    const url = URL.createObjectURL(new Blob([file.bytes], { type: 'application/pdf' }))
-    const a = Object.assign(document.createElement('a'), { href: url, download: file.name })
-    a.click()
-    URL.revokeObjectURL(url)
+    if (file) saveCopy(file.name, file.bytes).catch((err) => setError(describeError(err)))
+  }
+
+  const print = async () => {
+    if (!doc || busy) return
+    try {
+      await printDocument(doc, (done, total) => setBusy(`Preparing page ${done} of ${total} for printing…`))
+    } catch (err) {
+      handleEngineError(err)
+    } finally {
+      setBusy(null)
+    }
   }
 
   useEffect(() => {
@@ -169,6 +173,9 @@ export default function App() {
         e.preventDefault()
         searchBox.current?.focus()
         searchBox.current?.select()
+      } else if (mod && e.key === 'p' && doc) {
+        e.preventDefault()
+        void print()
       } else if (mod && e.key === 'o') {
         e.preventDefault()
         fileInput.current?.click()
@@ -210,9 +217,7 @@ export default function App() {
     >
       <header className="toolbar">
         <strong className="brand">PDF Pro</strong>
-        <button onClick={() => fileInput.current?.click()} disabled={!engine}>
-          Open
-        </button>
+        <button onClick={() => fileInput.current?.click()}>Open</button>
         <input
           ref={fileInput}
           type="file"
@@ -226,6 +231,9 @@ export default function App() {
         />
         <button onClick={download} disabled={!file}>
           Save a copy
+        </button>
+        <button onClick={() => void print()} disabled={!doc || !!busy}>
+          Print
         </button>
         <span className="filename" title={file?.name}>
           {file?.name}
@@ -273,14 +281,14 @@ export default function App() {
                   if (hits.length && query.trim() === (e.currentTarget.dataset.last ?? '')) gotoHit(e.shiftKey ? -1 : 1)
                   else {
                     e.currentTarget.dataset.last = query.trim()
-                    runSearch(query)
+                    void runSearch(query)
                   }
                 }}
               />
               {hits.length > 0 && (
                 <>
                   <span className="count">
-                    {activeHit + 1} of {hits.length}
+                    {activeHit + 1} of {hits.length >= 1000 ? '1000+' : hits.length}
                   </span>
                   <button onClick={() => gotoHit(-1)} aria-label="Previous match">
                     ↑
@@ -294,6 +302,32 @@ export default function App() {
           </>
         )}
       </header>
+
+      {busy && (
+        <div className="status" role="status">
+          {busy}
+        </div>
+      )}
+
+      {locked && (
+        <form
+          className="unlock"
+          onSubmit={(e) => {
+            e.preventDefault()
+            const pw = new FormData(e.currentTarget).get('password')
+            void openBytes(locked.name, locked.bytes, String(pw ?? ''))
+          }}
+        >
+          <label>
+            {locked.wrong ? 'Wrong password. Try again' : `“${locked.name}” is password-protected`}:{' '}
+            <input name="password" type="password" autoFocus autoComplete="off" aria-invalid={locked.wrong} />
+          </label>
+          <button type="submit">Open</button>
+          <button type="button" onClick={() => setLocked(null)}>
+            Cancel
+          </button>
+        </form>
+      )}
 
       {error && (
         <div className="error" role="alert">
@@ -327,7 +361,7 @@ export default function App() {
                     <PageCanvas
                       doc={doc}
                       pageIndex={i}
-                      zoom={THUMB_WIDTH / doc.pageSize(i).width}
+                      zoom={THUMB_WIDTH / doc.sizes[i].width}
                       className="thumb-page"
                       onError={handleEngineError}
                     />
@@ -344,8 +378,8 @@ export default function App() {
         <main ref={scroller} className="pages" onScroll={onScroll}>
           {!doc && (
             <div className={dragging ? 'empty drag' : 'empty'}>
-              <p>{engine ? 'Drop a PDF here, or' : 'Loading the PDF engine…'}</p>
-              {engine && <button onClick={() => fileInput.current?.click()}>Open a PDF</button>}
+              <p>Drop a PDF here, or</p>
+              <button onClick={() => fileInput.current?.click()}>Open a PDF</button>
               <p className="hint">Files stay on your device. Nothing is uploaded.</p>
             </div>
           )}

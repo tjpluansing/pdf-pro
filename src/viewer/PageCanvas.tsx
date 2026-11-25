@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PdfDocument, Rect } from '../engine/pdfium'
+import type { Rect } from '../engine/pdfium'
+import { CancelledError, type DocHandle } from './client'
 
 interface Props {
-  doc: PdfDocument
+  doc: DocHandle
   pageIndex: number
   /** CSS pixels per PDF point. */
   zoom: number
@@ -15,14 +16,16 @@ interface Props {
 }
 
 /**
- * One page, rendered only while it is near the viewport. The canvas is drawn at
- * devicePixelRatio for sharp text and re-rendered when the zoom changes.
+ * One page, rendered in the engine worker only while it is near the viewport.
+ * A page that scrolls away before its turn is cancelled, so fast scrolling
+ * through a long file only renders the pages you stop on.
  */
 export function PageCanvas({ doc, pageIndex, zoom, highlights, activeHighlight, className, onError }: Props) {
   const box = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const [visible, setVisible] = useState(false)
-  const size = doc.pageSize(pageIndex)
+  const [drawn, setDrawn] = useState(false)
+  const size = doc.sizes[pageIndex]
   const width = Math.round(size.width * zoom)
   const height = Math.round(size.height * zoom)
 
@@ -35,22 +38,23 @@ export function PageCanvas({ doc, pageIndex, zoom, highlights, activeHighlight, 
   }, [])
 
   useEffect(() => {
-    if (!visible || !canvas.current) return
-    // Defer so scrolling stays smooth when many pages become visible at once.
-    const id = requestAnimationFrame(() => {
-      const c = canvas.current
-      if (!c) return
-      try {
-        const dpr = window.devicePixelRatio || 1
-        const page = doc.renderPage(pageIndex, zoom * dpr)
-        c.width = page.width
-        c.height = page.height
-        c.getContext('2d')?.putImageData(new ImageData(page.data, page.width, page.height), 0, 0)
-      } catch (err) {
-        onError?.(err)
-      }
-    })
-    return () => cancelAnimationFrame(id)
+    if (!visible) return
+    const abort = new AbortController()
+    const dpr = window.devicePixelRatio || 1
+    doc.render(pageIndex, zoom * dpr, abort.signal).then(
+      (img) => {
+        const c = canvas.current
+        if (abort.signal.aborted || !c) return
+        c.width = img.width
+        c.height = img.height
+        c.getContext('2d')?.putImageData(img, 0, 0)
+        setDrawn(true)
+      },
+      (err) => {
+        if (!(err instanceof CancelledError) && !abort.signal.aborted) onError?.(err)
+      },
+    )
+    return () => abort.abort()
   }, [visible, doc, pageIndex, zoom, onError])
 
   const mark = (r: Rect, i: number, active: boolean) => (
@@ -62,7 +66,7 @@ export function PageCanvas({ doc, pageIndex, zoom, highlights, activeHighlight, 
   )
 
   return (
-    <div ref={box} className={className} style={{ width, height }} data-page={pageIndex}>
+    <div ref={box} className={drawn ? className : `${className} loading`} style={{ width, height }} data-page={pageIndex}>
       <canvas ref={canvas} style={{ width, height }} aria-label={`Page ${pageIndex + 1}`} />
       {highlights?.map((r, i) => mark(r, i, false))}
       {activeHighlight?.map((r, i) => mark(r, i, true))}

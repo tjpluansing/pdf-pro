@@ -172,6 +172,11 @@ export class PdfDocument {
     return size
   }
 
+  /** Sizes of every page, in points. Reads each page once, so call it once per document. */
+  pageSizes(): PageSize[] {
+    return Array.from({ length: this.pageCount }, (_, i) => this.pageSize(i))
+  }
+
   /** Render a page at `scale` pixels per point (1 = 72 dpi). */
   renderPage(pageIndex: number, scale: number): RenderedPage {
     const { width: pw, height: ph } = this.pageSize(pageIndex)
