@@ -204,6 +204,7 @@ input {
 }
 
 .pages {
+  position: relative;
   flex: 1;
   overflow: auto;
   background: var(--canvas);
@@ -382,4 +383,193 @@ input {
   color: var(--muted);
   background: var(--panel);
   border-top: 1px solid var(--line);
+}
+
+/* ---- Comment mode ---- */
+.comment-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.comment-bar > button {
+  font-size: 13px;
+  padding: 3px 8px;
+}
+.swatches {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+.swatch-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--panel);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.swatch-btn.on {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.sel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.annot-layer {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  user-select: none;
+}
+.text-sel {
+  position: absolute;
+  background: rgba(0, 110, 220, 0.28);
+  pointer-events: none;
+}
+.text-sel.preview-highlight {
+  background: color-mix(in srgb, var(--mark) 45%, transparent);
+  mix-blend-mode: multiply;
+}
+.text-sel.preview-underline {
+  background: none;
+  border-bottom: 2px solid var(--mark);
+}
+.text-sel.preview-strikeout {
+  background: linear-gradient(transparent 46%, var(--mark) 46%, var(--mark) 56%, transparent 56%);
+}
+.annot-selected {
+  position: absolute;
+  border: 1.5px dashed var(--accent);
+  border-radius: 3px;
+  pointer-events: none;
+}
+.annot-draft {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.freetext-input {
+  position: absolute;
+  font-family: Helvetica, Arial, sans-serif;
+  line-height: 1.25;
+  padding: 2px 3px;
+  border: 1.5px dashed var(--accent);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.9);
+  resize: both;
+  outline: none;
+}
+
+.comments {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  overflow: hidden;
+}
+.comments-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.comments-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.comments-field input {
+  flex: 1;
+  min-width: 0;
+}
+input.comments-field {
+  width: 100%;
+}
+.comments-empty {
+  color: var(--muted);
+}
+.comment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.comment {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  cursor: pointer;
+}
+.comment.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.comment-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.comment-kind {
+  font-weight: 600;
+}
+.comment-page {
+  color: var(--muted);
+  margin-left: auto;
+}
+.comment-by {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 2px 0 4px;
+}
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+}
+button.icon {
+  border: none;
+  background: none;
+  padding: 0 4px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--muted);
+}
+.comment-text {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px;
+  resize: vertical;
+}
+.comment-text:focus,
+.comment-text:hover {
+  border-color: var(--line);
+  background: var(--bg);
+}
+@media (max-width: 900px) {
+  .comments {
+    display: none;
+  }
 }

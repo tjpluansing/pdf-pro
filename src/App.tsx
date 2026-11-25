@@ -1,11 +1,55 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { PdfError, type OutlineItem, type SearchHit } from './engine/pdfium'
+import { PdfError, type Annotation, type NewAnnotation, type OutlineItem, type Point, type SearchHit, type TextLayout } from './engine/pdfium'
+import { AnnotLayer, MARKUP_TOOLS, type MarkupTool, type TextSelection, type Tool } from './viewer/AnnotLayer'
+import { CommentsPanel } from './viewer/CommentsPanel'
 import { EngineClient, type DocHandle } from './viewer/client'
 import { Organize } from './viewer/Organize'
 import { PageCanvas } from './viewer/PageCanvas'
 import type { Edit } from './viewer/protocol'
 import { saveCopy } from './viewer/platform'
 import { printDocument } from './viewer/print'
+
+const TOOLS: { tool: Tool; label: string; key: string }[] = [
+  { tool: 'select', label: 'Select', key: 'v' },
+  { tool: 'highlight', label: 'Highlight', key: 'h' },
+  { tool: 'underline', label: 'Underline', key: 'u' },
+  { tool: 'strikeout', label: 'Strikethrough', key: 'k' },
+  { tool: 'note', label: 'Note', key: 'n' },
+  { tool: 'freetext', label: 'Text box', key: 't' },
+  { tool: 'ink', label: 'Draw', key: 'd' },
+  { tool: 'square', label: 'Rectangle', key: 'r' },
+  { tool: 'circle', label: 'Ellipse', key: 'e' },
+  { tool: 'arrow', label: 'Arrow', key: 'a' },
+  { tool: 'line', label: 'Line', key: 'l' },
+]
+const SWATCHES = ['#ffd400', '#5fc35f', '#2a7ae2', '#d93025', '#1d1d1b']
+const DEFAULT_COLORS: Record<Tool, string> = {
+  select: '#ffd400',
+  highlight: '#ffd400',
+  underline: '#2a7ae2',
+  strikeout: '#d93025',
+  note: '#ffd400',
+  freetext: '#1d1d1b',
+  ink: '#d93025',
+  square: '#d93025',
+  circle: '#d93025',
+  arrow: '#d93025',
+  line: '#d93025',
+}
+const AUTHOR_KEY = 'pdfpro.author'
+
+function storedAuthor(): string {
+  try {
+    return localStorage.getItem(AUTHOR_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+const typingIn = (t: EventTarget | null) => {
+  const el = t as HTMLElement | null
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+}
 
 const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4]
 const THUMB_WIDTH = 120
@@ -43,7 +87,13 @@ export default function App() {
   const [hits, setHits] = useState<SearchHit[]>([])
   const [activeHit, setActiveHit] = useState(0)
   const [dragging, setDragging] = useState(false)
-  const [mode, setMode] = useState<'view' | 'organize'>('view')
+  const [mode, setMode] = useState<'view' | 'comment' | 'organize'>('view')
+  const [tool, setTool] = useState<Tool>('select')
+  const [colors, setColors] = useState(DEFAULT_COLORS)
+  const [annots, setAnnots] = useState<Annotation[] | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [textSel, setTextSel] = useState<TextSelection | null>(null)
+  const [author, setAuthor] = useState(storedAuthor)
   /** doc.version at the last open or save; anything newer is unsaved. */
   const [savedVersion, setSavedVersion] = useState(0)
   const scroller = useRef<HTMLDivElement>(null)
@@ -86,6 +136,9 @@ export default function App() {
         setDoc(next)
         setSavedVersion(next.version)
         setHits([])
+        setAnnots(null)
+        setSelectedId(null)
+        setTextSel(null)
         setQuery('')
         setCurrentPage(0)
         setFit('width')
@@ -184,11 +237,92 @@ export default function App() {
     [doc],
   )
 
+  // Comment mode lists every annotation; reload the list after each change to the document.
+  const commenting = mode === 'comment' && !!doc
+  useEffect(() => {
+    if (!commenting || !doc) return
+    let live = true
+    doc.annotations().then((list) => live && setAnnots(list), handleEngineError)
+    return () => {
+      live = false
+    }
+  }, [commenting, doc, handleEngineError])
+
+  // Character boxes per page, kept until the document changes.
+  const layouts = useMemo(() => {
+    void doc
+    return new Map<number, Promise<TextLayout>>()
+  }, [doc])
+  const loadLayout = useCallback(
+    (pageIndex: number) => {
+      let l = layouts.get(pageIndex)
+      if (!l && doc) {
+        l = doc.textLayout(pageIndex)
+        layouts.set(pageIndex, l)
+      }
+      return l ?? Promise.reject(new Error('No document is open'))
+    },
+    [layouts, doc],
+  )
+
+  const annotEdit = useCallback(
+    async (edit: Parameters<typeof applyEdit>[0]) => {
+      try {
+        await applyEdit(edit)
+      } catch (err) {
+        handleEngineError(err)
+      }
+    },
+    [applyEdit, handleEngineError],
+  )
+
+  const createAnnot = useCallback(
+    (spec: NewAnnotation) => {
+      const id = crypto.randomUUID()
+      setSelectedId(spec.kind === 'note' ? id : null)
+      void annotEdit({ kind: 'annot-add', id, annot: { ...spec, author } })
+    },
+    [annotEdit, author],
+  )
+  const moveAnnot = useCallback(
+    (a: Annotation, to: Point) => void annotEdit({ kind: 'annot-update', pageIndex: a.pageIndex, id: a.id, patch: { moveTo: to } }),
+    [annotEdit],
+  )
+  const deleteAnnot = (a: Annotation) => {
+    if (a.id === selectedId) setSelectedId(null)
+    void annotEdit({ kind: 'annot-remove', pageIndex: a.pageIndex, id: a.id })
+  }
+  const markSelection = (kind: MarkupTool) => {
+    if (!textSel) return
+    createAnnot({ kind, pageIndex: textSel.pageIndex, color: colors[kind], quads: textSel.rects })
+    setTextSel(null)
+  }
+  const saveAuthor = (name: string) => {
+    setAuthor(name)
+    try {
+      localStorage.setItem(AUTHOR_KEY, name)
+    } catch {
+      // Private windows may refuse storage; the name still applies until reload.
+    }
+  }
+
+  // Copy selected page text with the usual shortcut.
+  useEffect(() => {
+    const onCopy = (e: ClipboardEvent) => {
+      if (!textSel || typingIn(document.activeElement)) return
+      e.clipboardData?.setData('text/plain', textSel.text)
+      e.preventDefault()
+    }
+    document.addEventListener('copy', onCopy)
+    return () => document.removeEventListener('copy', onCopy)
+  }, [textSel])
+
   const undo = async () => {
     if (!doc || doc.undoDepth === 0 || busy) return
     try {
       setDoc(await doc.undo())
       setHits([])
+      setSelectedId(null)
     } catch (err) {
       handleEngineError(err)
     }
@@ -235,7 +369,7 @@ export default function App() {
         e.preventDefault()
         void print()
       } else if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && doc) {
-        if ((e.target as HTMLElement).tagName === 'INPUT') return
+        if (typingIn(e.target)) return
         e.preventDefault()
         void undo()
       } else if (mod && e.key === 's' && doc) {
@@ -244,6 +378,17 @@ export default function App() {
       } else if (mod && e.key === 'o') {
         e.preventDefault()
         fileInput.current?.click()
+      } else if (commenting && !mod && !e.altKey && !typingIn(e.target)) {
+        const t = TOOLS.find((x) => x.key === e.key.toLowerCase())
+        const sel = annots?.find((a) => a.id === selectedId)
+        if (t) setTool(t.tool)
+        else if ((e.key === 'Delete' || e.key === 'Backspace') && sel) {
+          e.preventDefault()
+          deleteAnnot(sel)
+        } else if (e.key === 'Escape') {
+          setSelectedId(null)
+          setTextSel(null)
+        }
       } else if (mod && (e.key === '=' || e.key === '+')) {
         e.preventDefault()
         stepZoom(1)
@@ -261,6 +406,12 @@ export default function App() {
     for (const h of hits) map.set(h.pageIndex, [...(map.get(h.pageIndex) ?? []), h])
     return map
   }, [hits])
+
+  const annotsByPage = useMemo(() => {
+    const map = new Map<number, Annotation[]>()
+    for (const a of annots ?? []) map.set(a.pageIndex, [...(map.get(a.pageIndex) ?? []), a])
+    return map
+  }, [annots])
 
   const pages = doc ? Array.from({ length: doc.pageCount }, (_, i) => i) : []
   const current = hits[activeHit]
@@ -309,6 +460,9 @@ export default function App() {
             <button role="tab" aria-selected={mode === 'view'} onClick={() => setMode('view')}>
               Read
             </button>
+            <button role="tab" aria-selected={mode === 'comment'} onClick={() => setMode('comment')}>
+              Comment
+            </button>
             <button role="tab" aria-selected={mode === 'organize'} onClick={() => setMode('organize')}>
               Organize pages
             </button>
@@ -317,7 +471,7 @@ export default function App() {
             </button>
           </span>
         )}
-        {doc && mode === 'view' && (
+        {doc && mode !== 'organize' && (
           <>
             <span className="pager">
               Page{' '}
@@ -417,6 +571,46 @@ export default function App() {
         </div>
       )}
 
+      {commenting && (
+        <div className="comment-bar" role="toolbar" aria-label="Comment tools">
+          {TOOLS.map((t) => (
+            <button
+              key={t.tool}
+              className={tool === t.tool ? 'on' : ''}
+              aria-pressed={tool === t.tool}
+              title={`${t.label} (${t.key.toUpperCase()})`}
+              onClick={() => setTool(t.tool)}
+            >
+              {t.label}
+            </button>
+          ))}
+          <span className="swatches" role="radiogroup" aria-label="Colour">
+            {SWATCHES.map((c) => (
+              <button
+                key={c}
+                role="radio"
+                aria-checked={colors[tool] === c}
+                aria-label={`Colour ${c}`}
+                className={colors[tool] === c ? 'swatch-btn on' : 'swatch-btn'}
+                style={{ background: c }}
+                onClick={() => setColors({ ...colors, [tool]: c })}
+              />
+            ))}
+          </span>
+          {textSel && (
+            <span className="sel-actions">
+              <span className="count">Selected text:</span>
+              {MARKUP_TOOLS.map((k) => (
+                <button key={k} onClick={() => markSelection(k)}>
+                  {TOOLS.find((t) => t.tool === k)!.label}
+                </button>
+              ))}
+              <button onClick={() => void navigator.clipboard?.writeText(textSel.text)}>Copy</button>
+            </span>
+          )}
+        </div>
+      )}
+
       {doc && mode === 'organize' && (
         <Organize
           doc={doc}
@@ -487,9 +681,40 @@ export default function App() {
                 highlights={hitsByPage.get(i)?.filter((h) => h !== current).flatMap((h) => h.rects)}
                 activeHighlight={current?.pageIndex === i ? current.rects : undefined}
                 onError={handleEngineError}
-              />
+              >
+                <AnnotLayer
+                  pageIndex={i}
+                  zoom={zoom}
+                  tool={commenting ? tool : 'select'}
+                  color={colors[tool]}
+                  annotations={commenting ? (annotsByPage.get(i) ?? []) : []}
+                  selectedId={selectedId}
+                  loadLayout={loadLayout}
+                  textSelection={textSel}
+                  onTextSelection={setTextSel}
+                  onSelect={setSelectedId}
+                  onCreate={createAnnot}
+                  onMove={moveAnnot}
+                />
+              </PageCanvas>
             ))}
         </main>
+        {commenting && (
+          <CommentsPanel
+            annotations={annots}
+            selectedId={selectedId}
+            author={author}
+            onAuthor={saveAuthor}
+            onSelect={(a) => {
+              setSelectedId(a.id)
+              const page = scroller.current?.querySelector<HTMLElement>(`[data-page="${a.pageIndex}"]`)
+              const top = (page?.offsetTop ?? 0) + a.rect.y * zoom - 80
+              scroller.current?.scrollTo({ top, behavior: 'smooth' })
+            }}
+            onComment={(a, contents) => void annotEdit({ kind: 'annot-update', pageIndex: a.pageIndex, id: a.id, patch: { contents } })}
+            onDelete={deleteAnnot}
+          />
+        )}
       </div>
     </div>
   )

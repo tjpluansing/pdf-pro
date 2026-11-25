@@ -72,7 +72,15 @@ function applyEdit(pdf: PdfEngine, d: PdfDocument, edit: Edit) {
       } finally {
         src.close()
       }
+      return
     }
+    case 'annot-add':
+      d.addAnnotation(edit.annot, edit.id)
+      return
+    case 'annot-update':
+      return d.updateAnnotation(edit.pageIndex, edit.id, edit.patch)
+    case 'annot-remove':
+      return d.removeAnnotation(edit.pageIndex, edit.id)
   }
 }
 
@@ -108,6 +116,12 @@ async function handle(req: Request) {
     case 'save': {
       const bytes = doc(req.docId).save()
       return reply({ id: req.id, ok: true, value: { bytes } }, [bytes.buffer])
+    }
+    case 'annotations':
+      return reply({ id: req.id, ok: true, value: doc(req.docId).allAnnotations() })
+    case 'textLayout': {
+      const { text, boxes } = doc(req.docId).textLayout(req.pageIndex)
+      return reply({ id: req.id, ok: true, value: { text, boxes } }, [boxes.buffer])
     }
     case 'extract': {
       const bytes = doc(req.docId).extractPages(req.pages)
