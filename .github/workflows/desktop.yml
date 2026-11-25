@@ -52,12 +52,14 @@ jobs:
       AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
       AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
       AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
-      # macOS: Developer ID Application certificate and notarization.
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # macOS: Developer ID Application certificate and notarization. These are
+      # renamed because `tauri build` acts on APPLE_* variables even when empty;
+      # this workflow signs and notarizes the Mac app itself.
+      MAC_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      MAC_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      MAC_NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
+      MAC_NOTARY_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      MAC_NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v5
 
@@ -72,8 +74,8 @@ jobs:
               [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_CLIENT_SECRET" ] && [ -n "$AZURE_TENANT_ID" ] \
                 && [ -n "$AZURE_SIGNING_ENDPOINT" ] && [ -n "$AZURE_SIGNING_ACCOUNT" ] && [ -n "$AZURE_SIGNING_PROFILE" ] && sign=true
             else
-              [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ] && [ -n "$APPLE_ID" ] \
-                && [ -n "$APPLE_APP_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ] && sign=true
+              [ -n "$MAC_CERTIFICATE" ] && [ -n "$MAC_CERTIFICATE_PASSWORD" ] && [ -n "$MAC_NOTARY_APPLE_ID" ] \
+                && [ -n "$MAC_NOTARY_PASSWORD" ] && [ -n "$MAC_NOTARY_TEAM_ID" ] && sign=true
             fi
           fi
           echo "SIGN=$sign" >> "$GITHUB_ENV"
@@ -177,11 +179,11 @@ jobs:
           set -euo pipefail
           kc="$RUNNER_TEMP/signing.keychain-db"
           kcpass=$(openssl rand -hex 16)
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          echo "$MAC_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
           security create-keychain -p "$kcpass" "$kc"
           security set-keychain-settings -lut 21600 "$kc"
           security unlock-keychain -p "$kcpass" "$kc"
-          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MAC_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$kc"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kcpass" "$kc" >/dev/null
           security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/cert.p12"
@@ -201,12 +203,12 @@ jobs:
         run: |
           set -euo pipefail
           notarize() {
-            xcrun notarytool submit "$1" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" --wait --timeout 60m --output-format json | tee "$RUNNER_TEMP/notary.json" || true
+            xcrun notarytool submit "$1" --apple-id "$MAC_NOTARY_APPLE_ID" --password "$MAC_NOTARY_PASSWORD" \
+              --team-id "$MAC_NOTARY_TEAM_ID" --wait --timeout 60m --output-format json | tee "$RUNNER_TEMP/notary.json" || true
             id=$(plutil -extract id raw "$RUNNER_TEMP/notary.json")
             status=$(plutil -extract status raw "$RUNNER_TEMP/notary.json")
             if [ "$status" != Accepted ]; then
-              xcrun notarytool log "$id" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID"
+              xcrun notarytool log "$id" --apple-id "$MAC_NOTARY_APPLE_ID" --password "$MAC_NOTARY_PASSWORD" --team-id "$MAC_NOTARY_TEAM_ID"
               echo "Apple did not accept $1 ($status)"; exit 1
             fi
           }
