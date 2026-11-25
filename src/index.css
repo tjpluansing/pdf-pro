@@ -988,3 +988,104 @@ button.danger {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* AI assistant */
+button.link {
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  color: var(--muted);
+  cursor: pointer;
+}
+button.link:hover {
+  color: var(--ink);
+}
+.assistant {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  min-height: 0;
+}
+.assistant-key {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.assistant-key p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.assistant-key-actions {
+  display: flex;
+  gap: 6px;
+}
+.assistant-log {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.assistant-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.assistant-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.assistant-q {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+  overflow-wrap: anywhere;
+}
+.assistant-a {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.assistant-error {
+  color: var(--diff-removed-ink);
+}
+.cite {
+  font-size: 11px;
+  padding: 0 4px;
+  margin-left: 3px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--muted);
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+.cite:hover {
+  color: var(--ink);
+  border-color: var(--muted);
+}
+.assistant-ask {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+}
+.assistant-ask textarea {
+  flex: 1;
+  resize: vertical;
+  font: inherit;
+  padding: 6px;
+}
+.assistant-summary-again {
+  align-self: flex-start;
+}
