@@ -1,7 +1,12 @@
 name: Desktop app
 
-# Builds unsigned Windows and macOS installers for every PR and every push to
-# Primary. Download them from the run's "Artifacts" section.
+# Builds Windows and macOS installers on every push to Primary, on manual runs,
+# and on PRs that touch the desktop shell. Download them from the run's
+# "Artifacts" section.
+#
+# Pushes to Primary and manual runs sign the installers (and notarize the Mac
+# ones) when the signing secrets are set; see docs/SIGNING.md. Without them,
+# and on PRs, the installers are unsigned and show a warning on first launch.
 #
 # Each installer carries LibreOffice (MPL-2.0), which PDF Pro runs as a
 # separate program to convert Word, Excel and PowerPoint files.
@@ -9,6 +14,12 @@ on:
   push:
     branches: [Primary]
   pull_request:
+    # macOS runner minutes cost about 10 times Linux ones in a private repo, so
+    # PRs build installers only when they change the desktop side.
+    paths:
+      - src-tauri/**
+      - .github/workflows/desktop.yml
+      - package-lock.json
   workflow_dispatch:
 
 env:
@@ -33,8 +44,40 @@ jobs:
             target: x86_64-apple-darwin
             lo: x86_64/LibreOffice_${LIBREOFFICE_VERSION}_MacOS_x86-64.dmg
     runs-on: ${{ matrix.os }}
+    env:
+      # Windows: Azure Artifact Signing (formerly Trusted Signing).
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+      # macOS: Developer ID Application certificate and notarization.
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v5
+
+      # Sign only builds that people will install (not PRs), and only when this
+      # platform's secrets are all set.
+      - name: Decide whether to sign
+        shell: bash
+        run: |
+          sign=false
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            if [ "$RUNNER_OS" = Windows ]; then
+              [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_CLIENT_SECRET" ] && [ -n "$AZURE_TENANT_ID" ] \
+                && [ -n "$AZURE_SIGNING_ENDPOINT" ] && [ -n "$AZURE_SIGNING_ACCOUNT" ] && [ -n "$AZURE_SIGNING_PROFILE" ] && sign=true
+            else
+              [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ] && [ -n "$APPLE_ID" ] \
+                && [ -n "$APPLE_APP_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ] && sign=true
+            fi
+          fi
+          echo "SIGN=$sign" >> "$GITHUB_ENV"
+          if [ "$sign" = true ]; then echo "Signing this build"; else echo "::notice::Unsigned build (PR, or signing secrets not set; see docs/SIGNING.md)"; fi
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -88,23 +131,102 @@ jobs:
           hdiutil detach "$RUNNER_TEMP/lo"
           du -sh "$RUNNER_TEMP/LibreOffice.app"
 
+      - name: Install the Windows signing tool
+        if: runner.os == 'Windows' && env.SIGN == 'true'
+        run: cargo install artifact-signing-cli --locked
+
+      # Tauri runs signCommand on PDF Pro's own .exe and on both installers.
+      # LibreOffice's files are already signed by The Document Foundation.
       - name: Build (Windows)
         if: runner.os == 'Windows'
-        run: npx tauri build --target ${{ matrix.target }} --config src-tauri/tauri.libreoffice.conf.json
         shell: bash
+        run: |
+          set -euo pipefail
+          config=src-tauri/tauri.libreoffice.conf.json
+          if [ "$SIGN" = true ]; then
+            config=src-tauri/tauri.signed.conf.json
+            node -e '
+              const fs = require("fs");
+              const c = JSON.parse(fs.readFileSync("src-tauri/tauri.libreoffice.conf.json", "utf8"));
+              const e = process.env;
+              c.bundle.windows = { signCommand: { cmd: "artifact-signing-cli", args: [
+                "-e", e.AZURE_SIGNING_ENDPOINT, "-a", e.AZURE_SIGNING_ACCOUNT,
+                "-c", e.AZURE_SIGNING_PROFILE, "-d", "PDF Pro", "%1"] } };
+              fs.writeFileSync("src-tauri/tauri.signed.conf.json", JSON.stringify(c, null, 2));
+            '
+          fi
+          npx tauri build --target ${{ matrix.target }} --config "$config"
+
+      - name: Check the Windows signatures
+        if: runner.os == 'Windows' && env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(Get-ChildItem src-tauri/target/${{ matrix.target }}/release -Filter *.exe -Depth 0) +
+                   @(Get-ChildItem -Recurse src-tauri/target/${{ matrix.target }}/release/bundle -Include *.msi, *.exe)
+          foreach ($f in $files) {
+            $s = Get-AuthenticodeSignature $f.FullName
+            "{0}: {1} ({2})" -f $f.Name, $s.Status, $s.SignerCertificate.Subject
+            if ($s.Status -ne 'Valid') { throw "$($f.Name) is not validly signed" }
+          }
+
+      # Put the Developer ID certificate in a throwaway keychain for this job.
+      - name: Import the Apple certificate
+        if: runner.os == 'macOS' && env.SIGN == 'true'
+        run: |
+          set -euo pipefail
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          kcpass=$(openssl rand -hex 16)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$kcpass" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kcpass" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$kc"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kcpass" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          identity=$(security find-identity -v -p codesigning "$kc" | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')
+          [ -n "$identity" ] || { echo "No Developer ID Application identity in APPLE_CERTIFICATE"; exit 1; }
+          echo "Signing as $identity"
+          echo "MAC_IDENTITY=$identity" >> "$GITHUB_ENV"
 
       # macOS: build the .app, put LibreOffice.app inside it with ditto (which
       # keeps its symlinks and signature), re-seal the outer app, then make the
-      # disk image.
+      # disk image. A signed build seals the app with the Developer ID and the
+      # hardened runtime, has Apple notarize it, and staples the ticket to the
+      # app and then to the disk image, so Gatekeeper opens both without a
+      # warning, even offline.
       - name: Build (macOS)
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
+          notarize() {
+            xcrun notarytool submit "$1" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" --wait --timeout 60m --output-format json | tee "$RUNNER_TEMP/notary.json" || true
+            id=$(plutil -extract id raw "$RUNNER_TEMP/notary.json")
+            status=$(plutil -extract status raw "$RUNNER_TEMP/notary.json")
+            if [ "$status" != Accepted ]; then
+              xcrun notarytool log "$id" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID"
+              echo "Apple did not accept $1 ($status)"; exit 1
+            fi
+          }
           npx tauri build --target ${{ matrix.target }} --bundles app
           app=$(ls -d src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app)
           mkdir -p "$app/Contents/Resources/libreoffice"
           ditto "$RUNNER_TEMP/LibreOffice.app" "$app/Contents/Resources/libreoffice/LibreOffice.app"
-          codesign --force --sign - "$app"
+          if [ "$SIGN" = true ]; then
+            codesign --force --options runtime --timestamp --sign "$MAC_IDENTITY" "$app"
+          else
+            codesign --force --sign - "$app"
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app"
+          if [ "$SIGN" = true ]; then
+            ditto -c -k --keepParent "$app" "$RUNNER_TEMP/app.zip"
+            notarize "$RUNNER_TEMP/app.zip"
+            rm "$RUNNER_TEMP/app.zip"
+            xcrun stapler staple "$app"
+            spctl --assess --type execute --verbose=4 "$app"
+          fi
           mkdir -p src-tauri/target/${{ matrix.target }}/release/bundle/dmg dmgroot
           ditto "$app" "dmgroot/$(basename "$app")"
           ln -s /Applications dmgroot/Applications
@@ -117,6 +239,12 @@ jobs:
             echo "hdiutil failed, retrying in $((attempt * 10))s"
             sleep $((attempt * 10))
           done
+          if [ "$SIGN" = true ]; then
+            codesign --force --timestamp --sign "$MAC_IDENTITY" "$dmg"
+            notarize "$dmg"
+            xcrun stapler staple "$dmg"
+            spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+          fi
 
       # Convert a file with the LibreOffice that ships in the build, from where the app will find it.
       - name: Check the bundled LibreOffice converts
@@ -144,3 +272,7 @@ jobs:
             src-tauri/target/**/release/bundle/dmg/*.dmg
           if-no-files-found: error
           compression-level: 0
+
+      - name: Remove the signing keychain
+        if: always() && runner.os == 'macOS' && env.SIGN == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
