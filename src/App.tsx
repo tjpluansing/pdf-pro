@@ -21,6 +21,8 @@ import { RedactLayer, type RedactMark } from './viewer/RedactLayer'
 import { RedactDialog } from './viewer/RedactDialog'
 import { EditTextLayer } from './viewer/EditTextLayer'
 import { CompareView } from './viewer/CompareView'
+import { CertSignDialog, type CertSignRequest } from './viewer/CertSignDialog'
+import { SignaturesBar } from './viewer/SignaturesBar'
 
 // The assistant brings in the Claude SDK, so it loads the first time it is opened.
 const AssistantPanel = lazy(() => import('./viewer/AssistantPanel').then((m) => ({ default: m.AssistantPanel })))
@@ -130,6 +132,11 @@ export default function App() {
   const [confirmRedact, setConfirmRedact] = useState(false)
   /** The other version, while comparing the open file with it. */
   const [assistantOpen, setAssistantOpen] = useState(false)
+  /** The certificate dialog, with the error from the last attempt. */
+  const [certDialog, setCertDialog] = useState<{ error?: string } | null>(null)
+  /** A certificate signature waiting for the user to click where it goes. */
+  const [certPlacing, setCertPlacing] = useState<CertSignRequest | null>(null)
+  const [certLast, setCertLast] = useState<CertSignRequest | null>(null)
   const [comparing, setComparing] = useState<{ older: DocHandle; name: string } | null>(null)
   const [pageTextKinds, setPageTextKinds] = useState<PageTextKind[]>([])
   const [notice, setNotice] = useState<string | null>(null)
@@ -303,6 +310,20 @@ export default function App() {
     },
     [doc],
   )
+
+  const signWithCertificate = async (req: CertSignRequest, pageIndex: number, rect?: Rect) => {
+    setCertLast(req)
+    setBusy('Signing…')
+    try {
+      await applyEdit({ kind: 'certify', p12: req.p12, password: req.password, pageIndex, rect, reason: req.reason || undefined, location: req.location || undefined })
+      setCertDialog(null)
+      setNotice('Signed. Save a copy to keep the signed file; editing it afterwards would invalidate the signature.')
+    } catch (err) {
+      setCertDialog({ error: describeError(err) })
+    } finally {
+      setBusy(null)
+    }
+  }
 
   // The Tools bar offers to remove watermarks, headers and footers only when there are some.
   const toolsMode = mode === 'tools' && !!doc && !comparing
@@ -704,6 +725,7 @@ export default function App() {
         } else if (e.key === 'Escape') {
           setSelectedId(null)
           setTextSel(null)
+          setCertPlacing(null)
         }
       } else if (mod && (e.key === '=' || e.key === '+')) {
         e.preventDefault()
@@ -965,9 +987,38 @@ export default function App() {
           <span className="sel-actions">
             {doc?.hasForm && <span className="count">{fields ? `${fields.filter((f) => f.type !== 'button').length} form fields` : ''}</span>}
             <button onClick={() => setSigning({ kind: 'signature' })}>{savedSignature('signature') ? 'Change signature' : 'Create signature'}</button>
+            <button onClick={() => setCertDialog({})} disabled={!!busy} title="Sign with a digital ID (.p12 or .pfx)">
+              Sign with certificate…
+            </button>
           </span>
+          {certPlacing && (
+            <span className="count" role="status">
+              Click on the page where the signature should go. Esc cancels.
+            </span>
+          )}
+          {!certPlacing && notice && (
+            <span className="count" role="status">
+              {notice}
+            </span>
+          )}
         </div>
       )}
+
+      {certDialog && doc && (
+        <CertSignDialog
+          error={certDialog.error}
+          last={certDialog.error ? certLast : null}
+          signed={doc.signatureCount}
+          onCancel={() => setCertDialog(null)}
+          onSign={(req) => {
+            setCertDialog(null)
+            if (req.visible) setCertPlacing(req)
+            else void signWithCertificate(req, currentPage)
+          }}
+        />
+      )}
+
+      {doc && !comparing && mode !== 'organize' && <SignaturesBar doc={doc} onError={handleEngineError} />}
 
       {toolsMode && doc && (
         <div className="comment-bar" role="toolbar" aria-label="Tools">
@@ -1201,6 +1252,22 @@ export default function App() {
                     marks={redactMarks.filter((m) => m.pageIndex === i)}
                     onAdd={(m) => addRedactMarks([m])}
                     onRemove={(id) => setRedactMarks((old) => old.filter((m) => m.id !== id))}
+                  />
+                )}
+                {certPlacing && (
+                  <div
+                    className="place-layer"
+                    onClick={(e) => {
+                      const box = e.currentTarget.getBoundingClientRect()
+                      const size = doc.sizes[i]
+                      const w = Math.min(200, size.width)
+                      const h = Math.min(56, size.height)
+                      const x = Math.max(0, Math.min(size.width - w, (e.clientX - box.left) / zoom - w / 2))
+                      const y = Math.max(0, Math.min(size.height - h, (e.clientY - box.top) / zoom - h / 2))
+                      const req = certPlacing
+                      setCertPlacing(null)
+                      void signWithCertificate(req, i, { x, y, width: w, height: h })
+                    }}
                   />
                 )}
                 {formsShown && fields && (

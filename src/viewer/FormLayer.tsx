@@ -100,6 +100,7 @@ function Field({ f, zoom, onChange, onSign }: { f: FormField; zoom: number; onCh
       )
     }
     case 'signature':
+      if (f.signed) return null
       return (
         <button {...common} className="field field-signature" onClick={() => onSign(f)}>
           Sign here

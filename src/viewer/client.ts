@@ -1,6 +1,6 @@
 // Main-thread handle on the PDF engine worker.
 import { PdfError, type Annotation, type FormField, type OutlineItem, type PageSize, type PageTextKind, type PdfErrorCode, type SearchHit, type Security, type TextLayout, type TextLine } from '../engine/pdfium'
-import type { BytesResult, DocInfo, Edit, OpenResult, RenderResult, Request, Response, TextLayoutResult } from './protocol'
+import type { BytesResult, DocInfo, Edit, OpenResult, RenderResult, Request, Response, SignaturesResult, TextLayoutResult } from './protocol'
 import type { Comparison } from '../engine/compare'
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void }
@@ -68,6 +68,8 @@ export class DocHandle {
   readonly undoDepth: number
   readonly hasForm: boolean
   readonly security: Security
+  /** Digital signatures in the file. */
+  readonly signatureCount: number
   /** Set on the handle a compress edit returns. */
   readonly compressed?: DocInfo['compressed']
   /** Set on the handle a text edit returns. */
@@ -85,6 +87,7 @@ export class DocHandle {
     this.undoDepth = r.undoDepth
     this.hasForm = r.hasForm
     this.security = r.security
+    this.signatureCount = r.signatureCount
     this.compressed = r.compressed
     this.replaced = r.replaced
     this.version = version
@@ -125,6 +128,11 @@ export class DocHandle {
   /** Pages with no text layer, which probably need OCR. */
   ocrCandidates(): Promise<number[]> {
     return this.client.request<number[]>({ type: 'ocrCandidates', docId: this.id })
+  }
+
+  /** The file's digital signatures and whether each still holds. */
+  signatures(): Promise<SignaturesResult> {
+    return this.client.request<SignaturesResult>({ type: 'signatures', docId: this.id })
   }
 
   /** What changed in this document since `older`, word by word. */
