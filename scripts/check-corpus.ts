@@ -32,7 +32,10 @@ for (const name of files) {
         // Cap the render at ~1000 px on the long side so huge pages stay quick.
         doc.renderPage(0, Math.min(1, 1000 / Math.max(width, height, 1)))
         doc.pageText(0)
+        doc.textLayout(0)
       }
+      // Comment mode reads every annotation in the file, so real-world ones must not crash it.
+      doc.allAnnotations()
       doc.outline()
       counts.opened++
     } finally {

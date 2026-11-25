@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Rect } from '../engine/pdfium'
 import { CancelledError, type DocHandle } from './client'
 
@@ -13,6 +13,8 @@ interface Props {
   activeHighlight?: Rect[]
   className?: string
   onError?: (err: unknown) => void
+  /** Drawn over the page, e.g. the comment tools. */
+  children?: ReactNode
 }
 
 /**
@@ -20,7 +22,7 @@ interface Props {
  * A page that scrolls away before its turn is cancelled, so fast scrolling
  * through a long file only renders the pages you stop on.
  */
-export function PageCanvas({ doc, pageIndex, zoom, highlights, activeHighlight, className, onError }: Props) {
+export function PageCanvas({ doc, pageIndex, zoom, highlights, activeHighlight, className, onError, children }: Props) {
   const box = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const [visible, setVisible] = useState(false)
@@ -70,6 +72,7 @@ export function PageCanvas({ doc, pageIndex, zoom, highlights, activeHighlight, 
       <canvas ref={canvas} style={{ width, height }} aria-label={`Page ${pageIndex + 1}`} />
       {highlights?.map((r, i) => mark(r, i, false))}
       {activeHighlight?.map((r, i) => mark(r, i, true))}
+      {children}
     </div>
   )
 }

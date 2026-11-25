@@ -6,6 +6,21 @@
  * Every PDFium handle is owned by a class here and released in close().
  */
 import { init, type WrappedPdfiumModule } from '@embedpdf/pdfium'
+import {
+  addAnnotation,
+  boxToView,
+  pageFrame,
+  readAnnotations,
+  readTextLayout,
+  removeById,
+  updateById,
+  type Annotation,
+  type AnnotationPatch,
+  type NewAnnotation,
+  type TextLayout,
+} from './annotations'
+
+export type { Annotation, AnnotationPatch, AnnotKind, NewAnnotation, Point, TextLayout } from './annotations'
 
 /** FPDF_ANNOT: draw annotations. FPDF_REVERSE_BYTE_ORDER: emit RGBA instead of BGRA. */
 const RENDER_FLAGS = 0x01 | 0x10
@@ -253,8 +268,8 @@ export class PdfDocument {
 
   searchPage(pageIndex: number, query: string, limit = 1000): SearchHit[] {
     const m = this.m
-    const { height: pageHeight } = this.pageSize(pageIndex)
-    return this.withTextPage(pageIndex, (text) => {
+    return this.withTextPage(pageIndex, (text, page) => {
+      const frame = pageFrame(m, page)
       const hits: SearchHit[] = []
       const qBytes = (query.length + 1) * 2
       const qPtr = m.pdfium.wasmExports.malloc(qBytes)
@@ -270,7 +285,7 @@ export class PdfDocument {
           for (let r = 0; r < rectCount; r++) {
             if (!m.FPDFText_GetRect(text, r, rPtr, rPtr + 8, rPtr + 16, rPtr + 24)) continue
             const [left, top, right, bottom] = [0, 8, 16, 24].map((o) => m.pdfium.getValue(rPtr + o, 'double'))
-            rects.push({ x: left, y: pageHeight - top, width: right - left, height: top - bottom })
+            rects.push(boxToView(frame, left, top, right, bottom))
           }
           hits.push({ pageIndex, charIndex, length, rects })
         }
@@ -406,6 +421,40 @@ export class PdfDocument {
     }
   }
 
+  // ---- Comments and markup ---------------------------------------------------
+
+  /** Comments and markup on one page (links, pop-ups and form fields are left out). */
+  annotations(pageIndex: number): Annotation[] {
+    return this.withPage(pageIndex, (page) => readAnnotations(this.m, page, pageIndex))
+  }
+
+  /** Comments and markup on every page, in page order. */
+  allAnnotations(): Annotation[] {
+    const out: Annotation[] = []
+    for (let i = 0; i < this.pageCount; i++) out.push(...this.annotations(i))
+    return out
+  }
+
+  /** Adds an annotation and returns its id. */
+  addAnnotation(spec: NewAnnotation, id: string = crypto.randomUUID()): string {
+    return this.withPage(spec.pageIndex, (page) => addAnnotation(this.m, page, spec, id))
+  }
+
+  updateAnnotation(pageIndex: number, id: string, patch: AnnotationPatch): void {
+    const ok = this.withPage(pageIndex, (page) => updateById(this.m, page, id, patch))
+    if (!ok) throw new PdfError('unknown', 'That comment is no longer on the page')
+  }
+
+  removeAnnotation(pageIndex: number, id: string): void {
+    const ok = this.withPage(pageIndex, (page) => removeById(this.m, page, id))
+    if (!ok) throw new PdfError('unknown', 'That comment is no longer on the page')
+  }
+
+  /** Characters and their boxes, for selecting text on a page. */
+  textLayout(pageIndex: number): TextLayout {
+    return this.withTextPage(pageIndex, (text, page) => readTextLayout(this.m, page, text))
+  }
+
   close(): void {
     if (this.closed) return
     this.closed = true
@@ -436,12 +485,12 @@ export class PdfDocument {
     }
   }
 
-  private withTextPage<T>(pageIndex: number, fn: (text: number) => T): T {
+  private withTextPage<T>(pageIndex: number, fn: (text: number, page: number) => T): T {
     return this.withPage(pageIndex, (page) => {
       const text = this.m.FPDFText_LoadPage(page)
       if (!text) throw new PdfError('page', `PDFium could not read text on page ${pageIndex}`)
       try {
-        return fn(text)
+        return fn(text, page)
       } finally {
         this.m.FPDFText_ClosePage(text)
       }

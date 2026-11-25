@@ -1,6 +1,6 @@
 // Main-thread handle on the PDF engine worker.
-import { PdfError, type OutlineItem, type PageSize, type PdfErrorCode, type SearchHit } from '../engine/pdfium'
-import type { BytesResult, DocInfo, Edit, OpenResult, RenderResult, Request, Response } from './protocol'
+import { PdfError, type Annotation, type OutlineItem, type PageSize, type PdfErrorCode, type SearchHit, type TextLayout } from '../engine/pdfium'
+import type { BytesResult, DocInfo, Edit, OpenResult, RenderResult, Request, Response, TextLayoutResult } from './protocol'
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void }
 
@@ -99,6 +99,15 @@ export class DocHandle {
   /** The whole document as it is now, edits included. */
   async save(): Promise<Uint8Array> {
     return (await this.client.request<BytesResult>({ type: 'save', docId: this.id })).bytes
+  }
+
+  /** Comments and markup on every page, in page order. */
+  annotations(): Promise<Annotation[]> {
+    return this.client.request<Annotation[]>({ type: 'annotations', docId: this.id })
+  }
+
+  textLayout(pageIndex: number): Promise<TextLayout> {
+    return this.client.request<TextLayoutResult>({ type: 'textLayout', docId: this.id, pageIndex })
   }
 
   /** A new PDF holding copies of the given pages. */
