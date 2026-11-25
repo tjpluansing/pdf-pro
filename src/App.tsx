@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PdfError, type Annotation, type NewAnnotation, type OutlineItem, type Point, type Rect, type SearchHit, type TextLayout, type TextLine } from './engine/pdfium'
 import { AnnotLayer, MARKUP_TOOLS, type MarkupTool, type TextSelection, type Tool } from './viewer/AnnotLayer'
 import { CommentsPanel } from './viewer/CommentsPanel'
@@ -21,6 +21,9 @@ import { RedactLayer, type RedactMark } from './viewer/RedactLayer'
 import { RedactDialog } from './viewer/RedactDialog'
 import { EditTextLayer } from './viewer/EditTextLayer'
 import { CompareView } from './viewer/CompareView'
+
+// The assistant brings in the Claude SDK, so it loads the first time it is opened.
+const AssistantPanel = lazy(() => import('./viewer/AssistantPanel').then((m) => ({ default: m.AssistantPanel })))
 
 const TOOLS: { tool: Tool; label: string; key: string }[] = [
   { tool: 'select', label: 'Select', key: 'v' },
@@ -126,6 +129,7 @@ export default function App() {
   const [redactMarks, setRedactMarks] = useState<RedactMark[]>([])
   const [confirmRedact, setConfirmRedact] = useState(false)
   /** The other version, while comparing the open file with it. */
+  const [assistantOpen, setAssistantOpen] = useState(false)
   const [comparing, setComparing] = useState<{ older: DocHandle; name: string } | null>(null)
   const [pageTextKinds, setPageTextKinds] = useState<PageTextKind[]>([])
   const [notice, setNotice] = useState<string | null>(null)
@@ -763,6 +767,9 @@ export default function App() {
         <button onClick={() => void print()} disabled={!doc || !!busy}>
           Print
         </button>
+        <button onClick={() => setAssistantOpen((o) => !o)} disabled={!doc} aria-pressed={assistantOpen} title="Summaries and answers about this document, from Claude">
+          Ask AI
+        </button>
         <span className="filename" title={file?.name}>
           {file?.name}
           {dirty && <span className="dirty"> · edited</span>}
@@ -1222,6 +1229,16 @@ export default function App() {
             onComment={(a, contents) => void annotEdit({ kind: 'annot-update', pageIndex: a.pageIndex, id: a.id, patch: { contents } })}
             onDelete={deleteAnnot}
           />
+        )}
+        {assistantOpen && doc && (
+          <Suspense fallback={<aside className="assistant" />}>
+            <AssistantPanel
+              doc={doc}
+              fileName={file?.name ?? 'document.pdf'}
+              onOpenPage={(i) => scrollToPage(Math.min(i, doc.pageCount - 1))}
+              onClose={() => setAssistantOpen(false)}
+            />
+          </Suspense>
         )}
       </div>
     </div>
