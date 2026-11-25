@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { parsePageRange } from '../src/viewer/pageRange'
 import { caretAt, overText, selectedText, selectionRects, wordAt } from '../src/viewer/selection'
 import type { TextLayout } from '../src/engine/pdfium'
 
@@ -38,5 +39,16 @@ describe('text selection', () => {
     expect(wordAt(l, 0)).toEqual([0, 2])
     expect(overText(l, { x: 25, y: 15 })).toBe(true)
     expect(overText(l, { x: 25, y: 60 })).toBe(false)
+  })
+})
+
+describe('parsePageRange', () => {
+  it('reads pages, ranges and open ends', () => {
+    expect(parsePageRange('', 3)).toEqual([0, 1, 2])
+    expect(parsePageRange('1-3, 5', 6)).toEqual([0, 1, 2, 4])
+    expect(parsePageRange('4-', 6)).toEqual([3, 4, 5])
+    expect(parsePageRange('-2 2', 6)).toEqual([0, 1])
+    expect(parsePageRange('7', 6)).toMatch(/1 to 6/)
+    expect(parsePageRange('a', 6)).toMatch(/not a page/)
   })
 })

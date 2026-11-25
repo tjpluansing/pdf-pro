@@ -1,5 +1,5 @@
 // Main-thread handle on the PDF engine worker.
-import { PdfError, type Annotation, type FormField, type OutlineItem, type PageSize, type PdfErrorCode, type SearchHit, type TextLayout } from '../engine/pdfium'
+import { PdfError, type Annotation, type FormField, type OutlineItem, type PageSize, type PageTextKind, type PdfErrorCode, type SearchHit, type Security, type TextLayout } from '../engine/pdfium'
 import type { BytesResult, DocInfo, Edit, OpenResult, RenderResult, Request, Response, TextLayoutResult } from './protocol'
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void }
@@ -66,6 +66,7 @@ export class DocHandle {
   /** Edits that can be undone. */
   readonly undoDepth: number
   readonly hasForm: boolean
+  readonly security: Security
   /** Bumped on every edit, so cached page images can tell they are stale. */
   readonly version: number
   private readonly client: EngineClient
@@ -78,6 +79,7 @@ export class DocHandle {
     this.outline = r.outline
     this.undoDepth = r.undoDepth
     this.hasForm = r.hasForm
+    this.security = r.security
     this.version = version
   }
 
@@ -106,6 +108,16 @@ export class DocHandle {
   /** The whole document as it is now, edits included. */
   async save(): Promise<Uint8Array> {
     return (await this.client.request<BytesResult>({ type: 'save', docId: this.id })).bytes
+  }
+
+  /** Enters the permissions password so security can be changed. Rejects with PdfError('password') when wrong. */
+  async unlockOwner(password: string): Promise<DocHandle> {
+    return this.next(await this.client.request<DocInfo>({ type: 'unlockOwner', docId: this.id, password }))
+  }
+
+  /** Which kinds of watermark, header or footer the document has. */
+  pageTextKinds(): Promise<PageTextKind[]> {
+    return this.client.request<PageTextKind[]>({ type: 'pageTextKinds', docId: this.id })
   }
 
   /** Fillable fields on every page, in page order. */
