@@ -26,6 +26,7 @@ import { FormEnv, addImageStamp, readFields, setField, type FieldValue, type For
 import { addOcrWords, type OcrWord } from './ocr'
 import { compressPage, type CompressOptions, type CompressResult } from './compress'
 import { redactPage, type RedactResult } from './redact'
+import { readLines, replaceLine, type ReplaceResult, type TextLine } from './textedit'
 import {
   addPageText,
   fillPlaceholders,
@@ -44,6 +45,7 @@ export type { CompressOptions, CompressResult } from './compress'
 export type { OcrWord } from './ocr'
 export { COMPRESS_PRESETS } from './compress'
 export type { RedactResult } from './redact'
+export type { ReplaceResult, TextLine } from './textedit'
 export type { PageText, PageTextKind, PageTextOptions, Permissions, Security, StandardFont } from './stamp'
 
 /** FPDF_ANNOT: draw annotations. FPDF_REVERSE_BYTE_ORDER: emit RGBA instead of BGRA. */
@@ -577,6 +579,25 @@ export class PdfDocument {
       })
     }
     return result
+  }
+
+  /** The page's text, grouped into lines that can be edited. */
+  textLines(pageIndex: number): TextLine[] {
+    return this.withTextPage(pageIndex, (text, page) => readLines(this.m, page, text, pageIndex))
+  }
+
+  /** Replaces one line's text (see textedit.ts). Empty text deletes the line. */
+  replaceText(pageIndex: number, objects: number[], expected: string, text: string): ReplaceResult {
+    return this.withTextPage(pageIndex, (textPage, page) => {
+      let result: ReplaceResult
+      try {
+        result = replaceLine(this.m, this.handle, page, textPage, pageIndex, objects, expected, text)
+      } catch (err) {
+        throw err instanceof PdfError ? err : new PdfError('unknown', err instanceof Error ? err.message : String(err))
+      }
+      if (!this.m.FPDFPage_GenerateContent(page)) throw new PdfError('unknown', 'PDFium could not update the page')
+      return result
+    })
   }
 
   /** True when a page has no text layer, so it is probably a scan that needs OCR. */

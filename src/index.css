@@ -818,3 +818,37 @@ button.danger {
   background: #c8321f;
   border-color: #c8321f;
 }
+
+/* Edit text: lines outline on hover; the one being edited becomes a text box. */
+.edit-text-layer {
+  position: absolute;
+  inset: 0;
+}
+.text-line {
+  position: absolute;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: 1px dashed transparent;
+  border-radius: 2px;
+  cursor: text;
+}
+.edit-text-layer:hover .text-line {
+  border-color: rgb(31 94 200 / 0.35);
+}
+.text-line:hover,
+.text-line:focus-visible {
+  border: 1px solid #1f5ec8;
+  background: rgb(31 94 200 / 0.08);
+}
+.text-line-input {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 0 2px;
+  margin: 0;
+  border: 2px solid #1f5ec8;
+  border-radius: 2px;
+  background: #fff;
+  line-height: 1;
+  z-index: 2;
+}
