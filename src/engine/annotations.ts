@@ -209,7 +209,7 @@ export function boxToView(f: PageFrame, left: number, top: number, right: number
   return { x, y, width: Math.abs(a.x - b.x), height: Math.abs(a.y - b.y) }
 }
 
-function viewToBox(f: PageFrame, r: ViewRect) {
+export function viewToBox(f: PageFrame, r: ViewRect) {
   const a = toPage(f, { x: r.x, y: r.y })
   const b = toPage(f, { x: r.x + r.width, y: r.y + r.height })
   return { left: Math.min(a.x, b.x), right: Math.max(a.x, b.x), bottom: Math.min(a.y, b.y), top: Math.max(a.y, b.y) }

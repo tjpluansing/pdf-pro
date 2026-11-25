@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { PdfError, type Annotation, type NewAnnotation, type OutlineItem, type Point, type Rect, type SearchHit, type TextLayout } from './engine/pdfium'
+import { PdfError, type Annotation, type NewAnnotation, type OutlineItem, type Point, type Rect, type SearchHit, type TextLayout, type TextLine } from './engine/pdfium'
 import { AnnotLayer, MARKUP_TOOLS, type MarkupTool, type TextSelection, type Tool } from './viewer/AnnotLayer'
 import { CommentsPanel } from './viewer/CommentsPanel'
 import { FormLayer } from './viewer/FormLayer'
@@ -17,6 +17,9 @@ import type { CompressOptions, PageText, PageTextKind, PageTextOptions, Permissi
 import type { Edit } from './viewer/protocol'
 import { OFFICE_EXTENSIONS, convertFile, isDesktop, isOfficeFile, saveCopy, withExtension } from './viewer/platform'
 import { printDocument } from './viewer/print'
+import { RedactLayer, type RedactMark } from './viewer/RedactLayer'
+import { RedactDialog } from './viewer/RedactDialog'
+import { EditTextLayer } from './viewer/EditTextLayer'
 
 const TOOLS: { tool: Tool; label: string; key: string }[] = [
   { tool: 'select', label: 'Select', key: 'v' },
@@ -110,7 +113,7 @@ export default function App() {
   const [hits, setHits] = useState<SearchHit[]>([])
   const [activeHit, setActiveHit] = useState(0)
   const [dragging, setDragging] = useState(false)
-  const [mode, setMode] = useState<'view' | 'comment' | 'sign' | 'tools' | 'organize'>('view')
+  const [mode, setMode] = useState<'view' | 'comment' | 'sign' | 'edit' | 'tools' | 'redact' | 'organize'>('view')
   const [signTool, setSignTool] = useState<Tool>('freetext')
   const [signColor, setSignColor] = useState('#1d1d1b')
   const [fields, setFields] = useState<FormField[] | null>(null)
@@ -119,6 +122,8 @@ export default function App() {
   const [stamp, setStamp] = useState<StampKind | null>(null)
   const [protecting, setProtecting] = useState(false)
   const [compressing, setCompressing] = useState(false)
+  const [redactMarks, setRedactMarks] = useState<RedactMark[]>([])
+  const [confirmRedact, setConfirmRedact] = useState(false)
   const [pageTextKinds, setPageTextKinds] = useState<PageTextKind[]>([])
   const [notice, setNotice] = useState<string | null>(null)
   const [tool, setTool] = useState<Tool>('select')
@@ -174,6 +179,7 @@ export default function App() {
         setSelectedId(null)
         setTextSel(null)
         setQuery('')
+        setRedactMarks([])
         setCurrentPage(0)
         setFit('width')
         scroller.current?.scrollTo({ top: 0 })
@@ -288,6 +294,8 @@ export default function App() {
 
   // The Tools bar offers to remove watermarks, headers and footers only when there are some.
   const toolsMode = mode === 'tools' && !!doc
+  const redactMode = mode === 'redact' && !!doc
+  const editMode = mode === 'edit' && !!doc
   useEffect(() => {
     if (!toolsMode || !doc) return
     let live = true
@@ -384,6 +392,51 @@ export default function App() {
       if (await saveCopy(withExtension(file.name, 'docx'), docx, 'docx')) setNotice('Saved as a Word document. Check the layout: complex pages may need tidying.')
     } catch (err) {
       setError(describeError(err))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const editText = async (line: TextLine, text: string) => {
+    setBusy('Updating text…')
+    setNotice(null)
+    try {
+      const next = await applyEdit({ kind: 'text', pageIndex: line.pageIndex, objects: line.objects, expected: line.text, text })
+      const sub = next.replaced?.substitute
+      setNotice(
+        !text.trim()
+          ? 'Line deleted.'
+          : sub
+            ? `The file's own font doesn't have every letter you typed, so this line now uses ${sub.replace('-', ' ')}.`
+            : 'Text updated. Save a copy to keep it.',
+      )
+    } catch (err) {
+      handleEngineError(err)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const addRedactMarks = (marks: Omit<RedactMark, 'id'>[]) =>
+    setRedactMarks((old) => [...old, ...marks.map((m) => ({ ...m, id: crypto.randomUUID() }))])
+
+  const markSearchResults = () => {
+    const have = new Set(redactMarks.map((m) => `${m.pageIndex}:${m.rect.x}:${m.rect.y}`))
+    addRedactMarks(hits.flatMap((h) => h.rects.map((rect) => ({ pageIndex: h.pageIndex, rect }))).filter((m) => !have.has(`${m.pageIndex}:${m.rect.x}:${m.rect.y}`)))
+  }
+
+  const applyRedactions = async () => {
+    setConfirmRedact(false)
+    const n = redactMarks.length
+    setBusy('Redacting…')
+    setNotice(null)
+    try {
+      await applyEdit({ kind: 'redact', marks: redactMarks.map(({ pageIndex, rect }) => ({ pageIndex, rect })) })
+      setRedactMarks([])
+      setHits([])
+      setNotice(`${n} area${n === 1 ? '' : 's'} redacted. Save a copy to keep it: in the saved file the content is gone for good.`)
+    } catch (err) {
+      handleEngineError(err)
     } finally {
       setBusy(null)
     }
@@ -684,8 +737,14 @@ export default function App() {
             <button role="tab" aria-selected={mode === 'sign'} onClick={() => setMode('sign')}>
               Fill &amp; Sign
             </button>
+            <button role="tab" aria-selected={mode === 'edit'} onClick={() => setMode('edit')}>
+              Edit text
+            </button>
             <button role="tab" aria-selected={mode === 'tools'} onClick={() => setMode('tools')}>
               Tools
+            </button>
+            <button role="tab" aria-selected={mode === 'redact'} onClick={() => setMode('redact')}>
+              Redact
             </button>
             <button role="tab" aria-selected={mode === 'organize'} onClick={() => setMode('organize')}>
               Organize pages
@@ -918,6 +977,46 @@ export default function App() {
         </div>
       )}
 
+      {editMode && doc && (
+        <div className="comment-bar" role="toolbar" aria-label="Edit text">
+          <span className="count">Click any line to change it. Enter saves, Esc cancels, and an empty line is deleted.</span>
+          {notice && (
+            <span className="count" role="status">
+              {notice}
+            </span>
+          )}
+        </div>
+      )}
+
+      {redactMode && doc && (
+        <div className="comment-bar" role="toolbar" aria-label="Redaction">
+          <span className="count">Drag over anything to remove it for good.</span>
+          {hits.length > 0 && <button onClick={markSearchResults}>Mark all {hits.length} search results</button>}
+          {!hits.length && (
+            <button onClick={() => searchBox.current?.focus()} title="Search for a name or number, then mark every match">
+              Find text to redact…
+            </button>
+          )}
+          {redactMarks.length > 0 && <button onClick={() => setRedactMarks([])}>Clear marks</button>}
+          <button className="primary danger" disabled={!redactMarks.length || !!busy} onClick={() => setConfirmRedact(true)}>
+            {redactMarks.length ? `Apply ${redactMarks.length} redaction${redactMarks.length === 1 ? '' : 's'}` : 'Apply redactions'}
+          </button>
+          {notice && (
+            <span className="count" role="status">
+              {notice}
+            </span>
+          )}
+        </div>
+      )}
+      {confirmRedact && (
+        <RedactDialog
+          marks={redactMarks.length}
+          pages={new Set(redactMarks.map((m) => m.pageIndex)).size}
+          onApply={() => void applyRedactions()}
+          onCancel={() => setConfirmRedact(false)}
+        />
+      )}
+
       {stamp && doc && <StampDialog kind={stamp} pageCount={doc.pageCount} onApply={addPageText} onCancel={() => setStamp(null)} />}
       {compressing && doc && <CompressDialog onApply={(o) => void compress(o)} onCancel={() => setCompressing(false)} />}
       {protecting && doc && <ProtectDialog permissions={doc.security.permissions} onApply={protect} onCancel={() => setProtecting(false)} />}
@@ -1022,6 +1121,16 @@ export default function App() {
                   onMove={moveAnnot}
                   onPlaceSignature={(pageIndex, at, kind) => void placeSignature(kind, pageIndex, at)}
                 />
+                {editMode && <EditTextLayer doc={doc} pageIndex={i} zoom={zoom} busy={!!busy} onEdit={(l, t) => void editText(l, t)} onError={handleEngineError} />}
+                {redactMode && (
+                  <RedactLayer
+                    pageIndex={i}
+                    zoom={zoom}
+                    marks={redactMarks.filter((m) => m.pageIndex === i)}
+                    onAdd={(m) => addRedactMarks([m])}
+                    onRemove={(id) => setRedactMarks((old) => old.filter((m) => m.id !== id))}
+                  />
+                )}
                 {formsShown && fields && (
                   <FormLayer
                     fields={fieldsByPage.get(i) ?? []}

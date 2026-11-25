@@ -38,6 +38,8 @@ The sample set is a fixed selection from [pdf.js's test files](https://github.co
 | `src/engine/stamp.ts` | Watermarks, headers, footers and page numbers (tagged as PDF artifacts so they can be removed); AES-256 passwords and permissions |
 | `src/engine/compress.ts` | Reduce file size: downsample and re-encode large photos as JPEG; scans, line art and transparent images are left alone |
 | `src/engine/ocr.ts`, `src/viewer/recognize.ts` | Recognise text on scans with Tesseract (runs on the device, model bundled) and add it as an invisible, searchable text layer |
+| `src/engine/redact.ts`, `src/engine/sweep.ts` | Redaction: deletes the text, image pixels, enclosed drawings, comments and form fields under marked areas, blacks them out, then rewrites the file without the unused objects PDFium would otherwise keep |
+| `src/engine/textedit.ts`, `src/viewer/EditTextLayer.tsx` | Edit text: groups text objects into lines and retypes a line in place, keeping its font, size, colour and position; switches to the closest standard font when an embedded subset lacks a letter |
 | `src-tauri/src/convert.rs` | Desktop only: open Word, Excel and PowerPoint files as PDF, and export a PDF to Word, by running the bundled LibreOffice (MPL-2.0) as a separate program. CI downloads LibreOffice and packs it into each installer |
 | `src/viewer/AnnotLayer.tsx`, `CommentsPanel.tsx`, `selection.ts` | Comment mode: the drawing and text-selection layer over each page, and the comments list |
 | `src/viewer/Organize.tsx` | Organize pages: select, rotate, delete, drag to reorder, insert or merge other PDFs, extract and split |

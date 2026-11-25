@@ -19,7 +19,7 @@ import type {
   StampImage,
   TextLayout,
 } from '../engine/pdfium'
-import type { Rect } from '../engine/pdfium'
+import type { Rect, ReplaceResult, TextLine } from '../engine/pdfium'
 
 export type { TextLayout }
 
@@ -42,6 +42,7 @@ export type Request =
   | { id: number; type: 'pageTextKinds'; docId: number }
   /** Pages with no text, which probably need OCR. */
   | { id: number; type: 'ocrCandidates'; docId: number }
+  | { id: number; type: 'textLines'; docId: number; pageIndex: number }
   /** Enter the permissions password, so security can be changed. */
   | { id: number; type: 'unlockOwner'; docId: number; password: string }
 
@@ -65,6 +66,10 @@ export type Edit =
   | { kind: 'compress'; options: CompressOptions }
   /** Recognised words to add as invisible text, per page. */
   | { kind: 'ocr'; pages: { pageIndex: number; words: OcrWord[] }[] }
+  /** Areas to redact, in view points. Permanent once the file is saved. */
+  | { kind: 'redact'; marks: { pageIndex: number; rect: Rect }[] }
+  /** Replaces one line of text; `expected` is its text when it was read. Empty text deletes it. */
+  | { kind: 'text'; pageIndex: number; objects: number[]; expected: string; text: string }
 
 export interface DocInfo {
   pageCount: number
@@ -77,6 +82,8 @@ export interface DocInfo {
   security: Security
   /** After a compress edit: what changed. Sizes are of the saved file, in bytes. */
   compressed?: { images: number; before: number; after: number }
+  /** After a text edit: set when a standard font stood in for the file's own. */
+  replaced?: ReplaceResult
 }
 
 export interface OpenResult extends DocInfo {
@@ -101,5 +108,5 @@ export interface RenderResult {
 }
 
 export type Response =
-  | { id: number; ok: true; value: OpenResult | DocInfo | RenderResult | BytesResult | SearchHit[] | Annotation[] | FormField[] | TextLayoutResult | PageTextKind[] | number[] | null }
+  | { id: number; ok: true; value: OpenResult | DocInfo | RenderResult | BytesResult | SearchHit[] | Annotation[] | FormField[] | TextLayoutResult | PageTextKind[] | TextLine[] | number[] | null }
   | { id: number; ok: false; error: { code: PdfErrorCode | 'cancelled'; message: string } }
