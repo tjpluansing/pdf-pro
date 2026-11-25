@@ -23,6 +23,7 @@ import {
 
 export type { Annotation, AnnotationPatch, AnnotKind, NewAnnotation, Point, TextLayout } from './annotations'
 import { FormEnv, addImageStamp, readFields, setField, type FieldValue, type FormField, type StampImage } from './forms'
+import { compressPage, type CompressOptions, type CompressResult } from './compress'
 import {
   addPageText,
   fillPlaceholders,
@@ -37,6 +38,8 @@ import {
   type Security,
 } from './stamp'
 export type { FieldType, FieldValue, FormField, StampImage } from './forms'
+export type { CompressOptions, CompressResult } from './compress'
+export { COMPRESS_PRESETS } from './compress'
 export type { PageText, PageTextKind, PageTextOptions, Permissions, Security, StandardFont } from './stamp'
 
 /** FPDF_ANNOT: draw annotations. FPDF_REVERSE_BYTE_ORDER: emit RGBA instead of BGRA. */
@@ -541,6 +544,17 @@ export class PdfDocument {
     const found = new Set<PageTextKind>()
     for (let i = 0; i < this.pageCount; i++) this.withPage(i, (page) => pageTextKinds(this.m, page).forEach((k) => found.add(k)))
     return [...found]
+  }
+
+  /** Shrinks large images; returns how many were replaced. The file gets smaller when saved. */
+  compress(opts: CompressOptions): CompressResult {
+    const result: CompressResult = { images: 0, seen: 0 }
+    for (let i = 0; i < this.pageCount; i++) {
+      this.withPage(i, (page) => {
+        if (compressPage(this.m, this.handle, page, opts, result)) this.m.FPDFPage_GenerateContent(page)
+      })
+    }
+    return result
   }
 
   get security(): Security {

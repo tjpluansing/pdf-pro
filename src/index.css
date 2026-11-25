@@ -771,3 +771,13 @@ button.primary {
     grid-template-columns: 1fr;
   }
 }
+.stamp-dialog label.choice {
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.stamp-dialog label.choice input {
+  margin-top: 3px;
+}
