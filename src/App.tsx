@@ -10,6 +10,7 @@ import { EngineClient, type DocHandle } from './viewer/client'
 import { Organize } from './viewer/Organize'
 import { PageCanvas } from './viewer/PageCanvas'
 import { CompressDialog } from './viewer/CompressDialog'
+import { recognizePages } from './viewer/recognize'
 import { ProtectDialog } from './viewer/ProtectDialog'
 import { StampDialog, type StampKind } from './viewer/StampDialog'
 import type { CompressOptions, PageText, PageTextKind, PageTextOptions, Permissions } from './engine/pdfium'
@@ -317,6 +318,32 @@ export default function App() {
         const pct = Math.round((1 - r.after / r.before) * 100)
         setNotice(`${r.images} image${r.images === 1 ? '' : 's'} compressed: ${mb(r.before)} → ${mb(r.after)} (${pct}% smaller). Save a copy to keep it.`)
       }
+    } catch (err) {
+      handleEngineError(err)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const recognize = async () => {
+    if (!doc) return
+    setNotice(null)
+    try {
+      const pages = await doc.ocrCandidates()
+      if (pages.length === 0) {
+        setNotice('Every page already has text, so there is nothing to recognise.')
+        return
+      }
+      setBusy('Loading text recognition…')
+      const found = await recognizePages(doc, pages, (done, total) => setBusy(`Recognising text: page ${Math.min(done + 1, total)} of ${total}…`))
+      const withText = found.filter((p) => p.words.length)
+      if (withText.length === 0) {
+        setNotice('No text was found on the scanned pages.')
+        return
+      }
+      setBusy('Adding the text…')
+      await applyEdit({ kind: 'ocr', pages: withText })
+      setNotice(`Text recognised on ${withText.length} page${withText.length === 1 ? '' : 's'}. You can now search, select and copy it.`)
     } catch (err) {
       handleEngineError(err)
     } finally {
@@ -803,6 +830,9 @@ export default function App() {
           <button onClick={() => setStamp('header-footer')}>Header &amp; footer</button>
           <button onClick={() => setStamp('page-numbers')}>Page numbers</button>
           <button onClick={() => setCompressing(true)}>Reduce file size</button>
+          <button onClick={() => void recognize()} disabled={!!busy}>
+            Recognise text (OCR)
+          </button>
           {pageTextKinds.includes('watermark') && (
             <button onClick={() => void runTool('Removing…', { kind: 'page-text-remove', kinds: ['watermark'] }, 'Watermarks removed.')}>
               Remove watermarks

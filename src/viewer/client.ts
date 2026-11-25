@@ -118,6 +118,11 @@ export class DocHandle {
     return this.next(await this.client.request<DocInfo>({ type: 'unlockOwner', docId: this.id, password }))
   }
 
+  /** Pages with no text layer, which probably need OCR. */
+  ocrCandidates(): Promise<number[]> {
+    return this.client.request<number[]>({ type: 'ocrCandidates', docId: this.id })
+  }
+
   /** Which kinds of watermark, header or footer the document has. */
   pageTextKinds(): Promise<PageTextKind[]> {
     return this.client.request<PageTextKind[]>({ type: 'pageTextKinds', docId: this.id })

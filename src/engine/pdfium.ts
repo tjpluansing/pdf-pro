@@ -23,6 +23,7 @@ import {
 
 export type { Annotation, AnnotationPatch, AnnotKind, NewAnnotation, Point, TextLayout } from './annotations'
 import { FormEnv, addImageStamp, readFields, setField, type FieldValue, type FormField, type StampImage } from './forms'
+import { addOcrWords, type OcrWord } from './ocr'
 import { compressPage, type CompressOptions, type CompressResult } from './compress'
 import {
   addPageText,
@@ -39,6 +40,7 @@ import {
 } from './stamp'
 export type { FieldType, FieldValue, FormField, StampImage } from './forms'
 export type { CompressOptions, CompressResult } from './compress'
+export type { OcrWord } from './ocr'
 export { COMPRESS_PRESETS } from './compress'
 export type { PageText, PageTextKind, PageTextOptions, Permissions, Security, StandardFont } from './stamp'
 
@@ -555,6 +557,20 @@ export class PdfDocument {
       })
     }
     return result
+  }
+
+  /** True when a page has no text layer, so it is probably a scan that needs OCR. */
+  needsOcr(pageIndex: number): boolean {
+    return this.pageText(pageIndex).trim().length === 0
+  }
+
+  /** Adds recognised words to a page as invisible, searchable text; returns how many were added. */
+  addOcrText(pageIndex: number, words: OcrWord[]): number {
+    return this.withPage(pageIndex, (page) => {
+      const n = addOcrWords(this.m, this.handle, page, words)
+      if (n && !this.m.FPDFPage_GenerateContent(page)) throw new PdfError('unknown', 'PDFium could not update the page')
+      return n
+    })
   }
 
   get security(): Security {

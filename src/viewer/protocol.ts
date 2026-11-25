@@ -8,6 +8,7 @@ import type {
   OutlineItem,
   PageSize,
   CompressOptions,
+  OcrWord,
   PageText,
   PageTextKind,
   PageTextOptions,
@@ -39,6 +40,8 @@ export type Request =
   | { id: number; type: 'formFields'; docId: number }
   /** Which kinds of watermark, header or footer the document has. */
   | { id: number; type: 'pageTextKinds'; docId: number }
+  /** Pages with no text, which probably need OCR. */
+  | { id: number; type: 'ocrCandidates'; docId: number }
   /** Enter the permissions password, so security can be changed. */
   | { id: number; type: 'unlockOwner'; docId: number; password: string }
 
@@ -60,6 +63,8 @@ export type Edit =
   | { kind: 'protect'; openPassword: string; ownerPassword: string; permissions: Permissions }
   | { kind: 'unprotect' }
   | { kind: 'compress'; options: CompressOptions }
+  /** Recognised words to add as invisible text, per page. */
+  | { kind: 'ocr'; pages: { pageIndex: number; words: OcrWord[] }[] }
 
 export interface DocInfo {
   pageCount: number
@@ -96,5 +101,5 @@ export interface RenderResult {
 }
 
 export type Response =
-  | { id: number; ok: true; value: OpenResult | DocInfo | RenderResult | BytesResult | SearchHit[] | Annotation[] | FormField[] | TextLayoutResult | PageTextKind[] | null }
+  | { id: number; ok: true; value: OpenResult | DocInfo | RenderResult | BytesResult | SearchHit[] | Annotation[] | FormField[] | TextLayoutResult | PageTextKind[] | number[] | null }
   | { id: number; ok: false; error: { code: PdfErrorCode | 'cancelled'; message: string } }
