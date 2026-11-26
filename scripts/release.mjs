@@ -40,9 +40,10 @@ const FILES = {
     get: (s) => s.match(/^\[package\][^[]*?^version = "([^"]*)"/ms)?.[1],
     set: (s, v) => s.replace(/^(\[package\][^[]*?^version = )"[^"]*"/ms, `$1"${v}"`),
   },
+  // \r?\n: Windows runners check files out with CRLF line endings.
   'src-tauri/Cargo.lock': {
-    get: (s) => s.match(/^name = "pdf-pro"\nversion = "([^"]*)"/m)?.[1],
-    set: (s, v) => s.replace(/^(name = "pdf-pro"\nversion = )"[^"]*"/m, `$1"${v}"`),
+    get: (s) => s.match(/^name = "pdf-pro"\r?\nversion = "([^"]*)"/m)?.[1],
+    set: (s, v) => s.replace(/^(name = "pdf-pro"\r?\nversion = )"[^"]*"/m, `$1"${v}"`),
   },
 }
 
