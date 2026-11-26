@@ -8,8 +8,10 @@
 //                                            write <dir>/latest.json for the in-app updater
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const root = new URL('..', import.meta.url).pathname
+// fileURLToPath, not .pathname, so Windows gets D:\\… rather than /D:/…
+const root = fileURLToPath(new URL('..', import.meta.url))
 const at = (p) => join(root, p)
 const read = (p) => readFileSync(at(p), 'utf8')
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$/
