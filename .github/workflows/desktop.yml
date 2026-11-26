@@ -4,9 +4,10 @@ name: Desktop app
 # and on PRs that touch the desktop shell. Download them from the run's
 # "Artifacts" section.
 #
-# Pushing a version tag (v1.2.3) also publishes a release: the installers, the
-# signed update files and latest.json, which the app checks to update itself.
-# See docs/RELEASING.md.
+# Pushing a version tag (v1.2.3), or running this workflow on Primary with a
+# version filled in, also publishes a release: the installers, the signed
+# update files and latest.json, which the app checks to update itself. See
+# docs/RELEASING.md.
 #
 # Pushes to Primary and manual runs sign the installers (and notarize the Mac
 # ones) when the signing secrets are set; see docs/SIGNING.md. Without them,
@@ -26,8 +27,15 @@ on:
       - .github/workflows/desktop.yml
       - package-lock.json
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Release this version (like 0.2.0; it must match the version files). Leave empty for a test build.'
+        required: false
+        default: ''
 
 env:
+  # The release being made: the pushed tag, or v<version> for a manual release.
+  RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || (inputs.release != '' && format('v{0}', inputs.release)) || '' }}
   LIBREOFFICE_VERSION: 26.2.7
   LIBREOFFICE_URL: https://download.documentfoundation.org/libreoffice/stable
 
@@ -79,9 +87,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Check the version matches the tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: node scripts/release.mjs check "$GITHUB_REF_NAME"
+      - name: Check the version matches the release
+        if: env.RELEASE_TAG != ''
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != refs/heads/Primary ]; then
+            echo "::error::Releases are made from Primary; run the workflow on Primary"
+            exit 1
+          fi
+          node scripts/release.mjs check "$RELEASE_TAG"
 
       # Sign only builds that people will install (not PRs), and only when this
       # platform's secrets are all set.
@@ -179,7 +193,7 @@ jobs:
           '
           cat src-tauri/tauri.build.conf.json
           update=false
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          if [ -n "$RELEASE_TAG" ]; then
             if [ -n "$UPDATER_PUBKEY" ] && [ -n "$UPDATER_KEY" ]; then
               update=true
             else
@@ -352,13 +366,13 @@ jobs:
         if: always() && runner.os == 'macOS' && env.SIGN == 'true'
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
 
-  # Version tags only: publish the installers and update files as a GitHub
-  # release. The app reads latest.json from the newest release, so the release
+  # Releases only (a version tag, or a manual run with a version): publish the
+  # installers and update files as a GitHub release. The app reads latest.json from the newest release, so the release
   # stays a draft until every file is uploaded. Tags with a suffix
   # (v1.2.0-beta.1) become pre-releases, which the app ignores.
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -378,7 +392,7 @@ jobs:
       - name: Publish the release
         run: |
           set -euo pipefail
-          tag="$GITHUB_REF_NAME"
+          tag="$RELEASE_TAG"
           version="${tag#v}"
           if [ "$RELEASES_REPO" != "$GITHUB_REPOSITORY" ] && [ "$HAS_RELEASES_TOKEN" != true ]; then
             echo "::error::RELEASES_REPO is $RELEASES_REPO, so the RELEASES_TOKEN secret is needed to publish there (docs/RELEASING.md)"
@@ -398,13 +412,21 @@ jobs:
             echo "- **Mac with Apple silicon (M1 and later):** \`PDF-Pro_${version}_macos-apple-silicon.dmg\`"
             echo "- **Mac with Intel:** \`PDF-Pro_${version}_macos-intel.dmg\`"
           } >> notes.md
-          pre=()
-          [[ "$version" == *-* ]] && pre=(--prerelease)
+          opts=()
+          [[ "$version" == *-* ]] && opts+=(--prerelease)
+          # In this repo, tag the built commit; a separate releases repo tags its own default branch.
+          [ "$RELEASES_REPO" = "$GITHUB_REPOSITORY" ] && opts+=(--target "$GITHUB_SHA")
           if ! gh release view "$tag" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
-            gh release create "$tag" --repo "$RELEASES_REPO" --draft "${pre[@]}" \
+            gh release create "$tag" --repo "$RELEASES_REPO" --draft "${opts[@]}" \
               --title "PDF Pro $version" --notes-file notes.md
           fi
           # The .sig files are already inside latest.json.
           find out -type f ! -name '*.sig' -print0 | xargs -0 gh release upload "$tag" --repo "$RELEASES_REPO" --clobber
           gh release edit "$tag" --repo "$RELEASES_REPO" --draft=false
           echo "Published https://github.com/$RELEASES_REPO/releases/tag/$tag"
+          # A manual release also tags the released commit here, so the source
+          # of every release can be found later.
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "refs/tags/$tag"
+          fi

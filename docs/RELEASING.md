@@ -1,6 +1,7 @@
 # Releasing PDF Pro and automatic updates
 
-Pushing a version tag such as `v0.2.0` builds the Windows and Mac installers,
+Pushing a version tag such as `v0.2.0`, or running the **Desktop app**
+workflow with a version filled in, builds the Windows and Mac installers,
 publishes them as a GitHub release, and tells every installed copy of PDF Pro
 that a new version is out. The app checks a few seconds after launch and twice
 a day after that, shows a bar with **What's new**, **Install and restart** and
@@ -89,11 +90,16 @@ while this repo is public.
    This writes the version into `package.json`, `package-lock.json`,
    `src-tauri/tauri.conf.json`, `Cargo.toml` and `Cargo.lock`. Merge that change
    to `Primary` (directly or through a PR).
-3. Tag the merged commit and push the tag:
+3. Start the release, either way:
+   - **From GitHub:** Actions → **Desktop app** → **Run workflow**, keep
+     branch `Primary`, enter the version (`0.2.0`, without the `v`) and click
+     **Run workflow**. The workflow tags the commit itself once the release is
+     published.
+   - **From git:** tag the merged commit and push the tag:
 
-   ```bash
-   git tag v0.2.0 && git push origin v0.2.0
-   ```
+     ```bash
+     git tag v0.2.0 && git push origin v0.2.0
+     ```
 
 The **Desktop app** workflow then checks that the tag matches the version
 files, builds and signs the installers, and the *release* job publishes them.
