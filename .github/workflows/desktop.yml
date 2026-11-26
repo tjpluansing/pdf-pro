@@ -192,6 +192,16 @@ jobs:
             fs.writeFileSync("src-tauri/tauri.build.conf.json", JSON.stringify(c, null, 2));
           '
           cat src-tauri/tauri.build.conf.json
+          # Catch a mis-pasted key now rather than after a 20-minute build: both
+          # keys are base64 of a short text file from `tauri signer generate`.
+          node -e '
+            const e = process.env;
+            const looks = (v, text) => !v || Buffer.from(v.trim(), "base64").toString("utf8").startsWith(`untrusted comment: ${text}`);
+            const bad = [];
+            if (!looks(e.UPDATER_PUBKEY, "minisign public key")) bad.push("the UPDATER_PUBKEY variable (should be the contents of pdf-pro-updater.key.pub)");
+            if (!looks(e.UPDATER_KEY, "rsign encrypted secret key")) bad.push("the TAURI_SIGNING_PRIVATE_KEY secret (should be the contents of pdf-pro-updater.key)");
+            if (bad.length) { console.log(`::error::Not an updater key: ${bad.join("; ")}. See docs/RELEASING.md`); process.exit(1); }
+          '
           update=false
           if [ -n "$RELEASE_TAG" ]; then
             if [ -n "$UPDATER_PUBKEY" ] && [ -n "$UPDATER_KEY" ]; then
