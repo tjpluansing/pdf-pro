@@ -13,7 +13,7 @@ npm run desktop        # desktop app (needs Rust and the Tauri prerequisites for
 npm run desktop:build  # installers in src-tauri/target/release/bundle
 ```
 
-Every PR also builds unsigned Windows (`.msi`, `.exe`) and macOS (`.dmg`, universal) installers in the **Desktop app** workflow; download them from the run's Artifacts. Unsigned builds show a security warning on first launch (on macOS: right-click the app, then Open).
+The **Desktop app** workflow builds Windows (`.msi`, `.exe`) and macOS (`.dmg`, Apple silicon and Intel) installers on every push to `Primary`, on manual runs, and on PRs that change `src-tauri/`; download them from the run's Artifacts. Builds from `Primary` are signed (and notarized on macOS) once the signing secrets are set up; see [docs/SIGNING.md](docs/SIGNING.md). Unsigned builds show a security warning on first launch (on macOS: right-click the app, then Open).
 
 ## Checks
 
