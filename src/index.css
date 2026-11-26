@@ -1149,3 +1149,28 @@ button.link:hover {
 .sig-status-invalid {
   background: rgba(217, 48, 37, 0.28);
 }
+
+/* ---- Update available (desktop) ---- */
+.update-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+}
+.update-bar > button {
+  font-size: 13px;
+  padding: 3px 8px;
+}
+.update-notes {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: inherit;
+  color: var(--muted);
+}

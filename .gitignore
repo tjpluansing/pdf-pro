@@ -23,4 +23,4 @@ dist-ssr
 *.sln
 *.sw?
 corpus/
-src-tauri/tauri.signed.conf.json
+src-tauri/tauri.build.conf.json
