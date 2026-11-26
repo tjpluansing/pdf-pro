@@ -4,6 +4,10 @@ name: Desktop app
 # and on PRs that touch the desktop shell. Download them from the run's
 # "Artifacts" section.
 #
+# Pushing a version tag (v1.2.3) also publishes a release: the installers, the
+# signed update files and latest.json, which the app checks to update itself.
+# See docs/RELEASING.md.
+#
 # Pushes to Primary and manual runs sign the installers (and notarize the Mac
 # ones) when the signing secrets are set; see docs/SIGNING.md. Without them,
 # and on PRs, the installers are unsigned and show a warning on first launch.
@@ -13,6 +17,7 @@ name: Desktop app
 on:
   push:
     branches: [Primary]
+    tags: ['v*']
   pull_request:
     # macOS runner minutes cost about 10 times Linux ones in a private repo, so
     # PRs build installers only when they change the desktop side.
@@ -60,8 +65,23 @@ jobs:
       MAC_NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
       MAC_NOTARY_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
       MAC_NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # In-app updates: the minisign key pair from `npx tauri signer generate`.
+      # The app carries the public key and only installs files signed with
+      # the private one. Without UPDATER_PUBKEY the app is built without an
+      # updater.
+      UPDATER_PUBKEY: ${{ vars.UPDATER_PUBKEY }}
+      UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      UPDATER_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # Where releases are published and where the app looks for updates. Set
+      # this to a public repo (like tjpluansing/pdf-pro-releases) before this
+      # repo goes private; see docs/RELEASING.md.
+      RELEASES_REPO: ${{ vars.RELEASES_REPO || github.repository }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Check the version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/release.mjs check "$GITHUB_REF_NAME"
 
       # Sign only builds that people will install (not PRs), and only when this
       # platform's secrets are all set.
@@ -133,6 +153,42 @@ jobs:
           hdiutil detach "$RUNNER_TEMP/lo"
           du -sh "$RUNNER_TEMP/LibreOffice.app"
 
+      # One build config for this run: LibreOffice as a resource (Windows), the
+      # Windows signing command, and the updater's key and feed address.
+      # Release builds also sign the update files, which needs the private key.
+      - name: Write the build config
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs");
+            const e = process.env;
+            const c = e.RUNNER_OS === "Windows" ? JSON.parse(fs.readFileSync("src-tauri/tauri.libreoffice.conf.json", "utf8")) : {};
+            if (e.RUNNER_OS === "Windows" && e.SIGN === "true") {
+              c.bundle.windows = { signCommand: { cmd: "artifact-signing-cli", args: [
+                "-e", e.AZURE_SIGNING_ENDPOINT, "-a", e.AZURE_SIGNING_ACCOUNT,
+                "-c", e.AZURE_SIGNING_PROFILE, "-d", "PDF Pro", "%1"] } };
+            }
+            if (e.UPDATER_PUBKEY) {
+              c.plugins = { updater: {
+                pubkey: e.UPDATER_PUBKEY.trim(),
+                endpoints: [`https://github.com/${e.RELEASES_REPO}/releases/latest/download/latest.json`],
+                windows: { installMode: "passive" } } };
+            }
+            fs.writeFileSync("src-tauri/tauri.build.conf.json", JSON.stringify(c, null, 2));
+          '
+          cat src-tauri/tauri.build.conf.json
+          update=false
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            if [ -n "$UPDATER_PUBKEY" ] && [ -n "$UPDATER_KEY" ]; then
+              update=true
+            else
+              echo "::warning::UPDATER_PUBKEY or TAURI_SIGNING_PRIVATE_KEY is not set, so this release has no update files and installed apps won't see it (docs/RELEASING.md)"
+            fi
+          fi
+          echo "UPDATE_FILES=$update" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_ENV"
+
       - name: Install the Windows signing tool
         if: runner.os == 'Windows' && env.SIGN == 'true'
         run: cargo install artifact-signing-cli --locked
@@ -142,22 +198,7 @@ jobs:
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: |
-          set -euo pipefail
-          config=src-tauri/tauri.libreoffice.conf.json
-          if [ "$SIGN" = true ]; then
-            config=src-tauri/tauri.signed.conf.json
-            node -e '
-              const fs = require("fs");
-              const c = JSON.parse(fs.readFileSync("src-tauri/tauri.libreoffice.conf.json", "utf8"));
-              const e = process.env;
-              c.bundle.windows = { signCommand: { cmd: "artifact-signing-cli", args: [
-                "-e", e.AZURE_SIGNING_ENDPOINT, "-a", e.AZURE_SIGNING_ACCOUNT,
-                "-c", e.AZURE_SIGNING_PROFILE, "-d", "PDF Pro", "%1"] } };
-              fs.writeFileSync("src-tauri/tauri.signed.conf.json", JSON.stringify(c, null, 2));
-            '
-          fi
-          npx tauri build --target ${{ matrix.target }} --config "$config"
+        run: npx tauri build --target ${{ matrix.target }} --config src-tauri/tauri.build.conf.json
 
       - name: Check the Windows signatures
         if: runner.os == 'Windows' && env.SIGN == 'true'
@@ -212,7 +253,7 @@ jobs:
               echo "Apple did not accept $1 ($status)"; exit 1
             fi
           }
-          npx tauri build --target ${{ matrix.target }} --bundles app
+          npx tauri build --target ${{ matrix.target }} --bundles app --config src-tauri/tauri.build.conf.json
           app=$(ls -d src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app)
           mkdir -p "$app/Contents/Resources/libreoffice"
           ditto "$RUNNER_TEMP/LibreOffice.app" "$app/Contents/Resources/libreoffice/LibreOffice.app"
@@ -265,16 +306,105 @@ jobs:
           head -c 2 check-out2/check.docx | grep -q PK
           echo "LibreOffice in the build converts both ways"
 
+      # Give the files release names without spaces (GitHub would turn them
+      # into dots). Release builds add the update files the app downloads (the
+      # Windows installers themselves; on macOS, the finished app packed as
+      # .tar.gz) with a signature next to each.
+      - name: Collect the installers
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          bundle=src-tauri/target/${{ matrix.target }}/release/bundle
+          base="PDF-Pro_${APP_VERSION}_${{ matrix.name }}"
+          mkdir -p out
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp "$(ls $bundle/nsis/*.exe | head -1)" "out/PDF-Pro_${APP_VERSION}_windows-x64-setup.exe"
+            cp "$(ls $bundle/msi/*.msi | head -1)" "out/PDF-Pro_${APP_VERSION}_windows-x64.msi"
+            update_files=(out/*.exe out/*.msi)
+          else
+            cp "$(ls $bundle/dmg/*.dmg | head -1)" "out/$base.dmg"
+            update_files=()
+            if [ "$UPDATE_FILES" = true ]; then
+              app=$(ls -d $bundle/macos/*.app)
+              COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "out/$base.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
+              update_files=("out/$base.app.tar.gz")
+            fi
+          fi
+          if [ "$UPDATE_FILES" = true ]; then
+            for f in "${update_files[@]}"; do
+              npx tauri signer sign "$f"
+              test -s "$f.sig"
+            done
+          fi
+          ls -l out
+
       - uses: actions/upload-artifact@v5
         with:
           name: pdf-pro-${{ matrix.name }}
-          path: |
-            src-tauri/target/**/release/bundle/msi/*.msi
-            src-tauri/target/**/release/bundle/nsis/*.exe
-            src-tauri/target/**/release/bundle/dmg/*.dmg
+          path: out/*
           if-no-files-found: error
           compression-level: 0
 
       - name: Remove the signing keychain
         if: always() && runner.os == 'macOS' && env.SIGN == 'true'
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+
+  # Version tags only: publish the installers and update files as a GitHub
+  # release. The app reads latest.json from the newest release, so the release
+  # stays a draft until every file is uploaded. Tags with a suffix
+  # (v1.2.0-beta.1) become pre-releases, which the app ignores.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASES_REPO: ${{ vars.RELEASES_REPO || github.repository }}
+      # Publishing to another repo needs a token for it; this repo's own token
+      # only reaches this repo.
+      GH_TOKEN: ${{ secrets.RELEASES_TOKEN || github.token }}
+      HAS_RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: pdf-pro-*
+          path: out
+          merge-multiple: true
+      - name: Publish the release
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          if [ "$RELEASES_REPO" != "$GITHUB_REPOSITORY" ] && [ "$HAS_RELEASES_TOKEN" != true ]; then
+            echo "::error::RELEASES_REPO is $RELEASES_REPO, so the RELEASES_TOKEN secret is needed to publish there (docs/RELEASING.md)"
+            exit 1
+          fi
+          if ls out/*.sig >/dev/null 2>&1; then
+            node scripts/release.mjs manifest "$version" out "https://github.com/$RELEASES_REPO/releases/download/$tag"
+          else
+            echo "::warning::No update files in this build, so installed apps won't be offered this version"
+          fi
+          node scripts/release.mjs notes "$version" > notes.md
+          {
+            echo
+            echo '### Download'
+            echo
+            echo "- **Windows:** \`PDF-Pro_${version}_windows-x64-setup.exe\` (the \`.msi\` is for IT departments)"
+            echo "- **Mac with Apple silicon (M1 and later):** \`PDF-Pro_${version}_macos-apple-silicon.dmg\`"
+            echo "- **Mac with Intel:** \`PDF-Pro_${version}_macos-intel.dmg\`"
+          } >> notes.md
+          pre=()
+          [[ "$version" == *-* ]] && pre=(--prerelease)
+          if ! gh release view "$tag" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$RELEASES_REPO" --draft "${pre[@]}" \
+              --title "PDF Pro $version" --notes-file notes.md
+          fi
+          # The .sig files are already inside latest.json.
+          find out -type f ! -name '*.sig' -print0 | xargs -0 gh release upload "$tag" --repo "$RELEASES_REPO" --clobber
+          gh release edit "$tag" --repo "$RELEASES_REPO" --draft=false
+          echo "Published https://github.com/$RELEASES_REPO/releases/tag/$tag"

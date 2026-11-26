@@ -15,6 +15,7 @@ import { ProtectDialog } from './viewer/ProtectDialog'
 import { StampDialog, type StampKind } from './viewer/StampDialog'
 import type { CompressOptions, PageText, PageTextKind, PageTextOptions, Permissions } from './engine/pdfium'
 import type { Edit } from './viewer/protocol'
+import { UpdateBanner } from './viewer/UpdateBanner'
 import { OFFICE_EXTENSIONS, convertFile, isDesktop, isOfficeFile, saveCopy, withExtension } from './viewer/platform'
 import { printDocument } from './viewer/print'
 import { RedactLayer, type RedactMark } from './viewer/RedactLayer'
@@ -888,6 +889,7 @@ export default function App() {
           </>
         )}
       </header>
+      <UpdateBanner unsaved={dirty} />
 
       {busy && (
         <div className="status" role="status">

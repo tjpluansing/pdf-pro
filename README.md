@@ -15,6 +15,8 @@ npm run desktop:build  # installers in src-tauri/target/release/bundle
 
 The **Desktop app** workflow builds Windows (`.msi`, `.exe`) and macOS (`.dmg`, Apple silicon and Intel) installers on every push to `Primary`, on manual runs, and on PRs that change `src-tauri/`; download them from the run's Artifacts. Builds from `Primary` are signed (and notarized on macOS) once the signing secrets are set up; see [docs/SIGNING.md](docs/SIGNING.md). Unsigned builds show a security warning on first launch (on macOS: right-click the app, then Open).
 
+Pushing a version tag (`v1.2.3`) publishes a release, and installed copies of the desktop app offer to update themselves to it. Setup and steps are in [docs/RELEASING.md](docs/RELEASING.md); what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+
 ## Checks
 
 ```bash
@@ -47,7 +49,8 @@ The sample set is a fixed selection from [pdf.js's test files](https://github.co
 | `src/viewer/AnnotLayer.tsx`, `CommentsPanel.tsx`, `selection.ts` | Comment mode: the drawing and text-selection layer over each page, and the comments list |
 | `src/viewer/Organize.tsx` | Organize pages: select, rotate, delete, drag to reorder, insert or merge other PDFs, extract and split |
 | `src/viewer/` (other) | Page canvas, printing, and the desktop/browser differences (`platform.ts`) |
-| `src-tauri/` | Desktop shell (Tauri 2): window, native Save dialog |
+| `src-tauri/` | Desktop shell (Tauri 2): window, native Save dialog, in-app updates |
+| `src/viewer/UpdateBanner.tsx`, `scripts/release.mjs` | Desktop only: the "new version available" bar; versioning, release notes and the updater's latest.json |
 | `src/App.tsx` | The viewer UI |
 | `scripts/` | Sample PDF download and the crash check |
 | `test/` | Engine, page-organizing, annotation and text-selection tests, using PDFs built with pdf-lib and an AES-256 fixture (password `secret`) |
